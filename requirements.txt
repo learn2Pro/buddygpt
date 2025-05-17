@@ -1,0 +1,11 @@
+accelerate
+datasets
+transformers
+trl
+torch
+peft
+wandb
+scikit-learn
+ipywidgets
+deepspeed
+numpy
