@@ -5,6 +5,9 @@ import torch.nn as nn
 from dataclasses import dataclass
 from transformers import PretrainedConfig, AutoConfig, AutoModelForCausalLM
 from transformers import PreTrainedModel
+from transformers.modeling_outputs import CausalLMOutputWithPast
+from typing import Optional
+from transformers.generation import GenerationConfig
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 FLASH = 0
@@ -272,7 +275,7 @@ class BuddyGPT(PreTrainedModel):
     def forward(self, input_ids, labels=None, **kwargs):
         input_ids = input_ids.to(device)
         B, T = input_ids.size()
-        pos = torch.arange(0, T, dtype=torch.long, device=device)
+        # pos = torch.arange(0, T, dtype=torch.long, device=device)
         token_embed = self.transformer.wte(input_ids)
         # pos_embed = self.transformer.wpe(pos)
         x = token_embed
@@ -287,23 +290,52 @@ class BuddyGPT(PreTrainedModel):
             targets = labels[:,1:].contiguous().view(-1)
             loss = F.cross_entropy(shape_logits, targets, ignore_index=-100)
         else:
-            logits = self.lm_head(x[:, [-1], :])
+            logits = self.lm_head(x) # B, 1, n_vocab
+            print(logits.shape)
             loss = None
-        return (loss, logits) if loss else logits
+        return CausalLMOutputWithPast(loss=loss, logits=logits) if loss else CausalLMOutputWithPast(logits=logits)
 
-    @torch.no_grad()
-    def generate(self, input_ids, max_length, temperature=1.0, **kwargs):
-        x = input_ids
-        for _ in range(max_length):
-            idx_cond = x if x.size(1)<=self.config.n_block else x[:, -self.config.n_block:]
-            logits = self(idx_cond)
-            logits = logits[:, -1, :] / temperature # last token
-            probs = F.softmax(logits, dim=-1) # B, n_vocab
-            predict = torch.multinomial(probs, num_samples=1) # B, 1
-            if self.eos_token_id and self.eos_token_id == predict.item():
-                return x
-            x = torch.cat([x, predict], dim=-1)
-        return x
+    # @torch.no_grad()
+    # def generate(self, input_ids, max_length, temperature=1.0, **kwargs):
+    #     x = input_ids
+    #     for _ in range(max_length):
+    #         idx_cond = x if x.size(1)<=self.config.n_block else x[:, -self.config.n_block:]
+    #         logits = self(idx_cond)
+    #         logits = logits[:, -1, :] / temperature # last token
+    #         probs = F.softmax(logits, dim=-1) # B, n_vocab
+    #         predict = torch.multinomial(probs, num_samples=1) # B, 1
+    #         if self.eos_token_id and self.eos_token_id == predict.item():
+    #             return x
+    #         x = torch.cat([x, predict], dim=-1)
+    #     return x
+    
+    def generate(
+        self,
+        inputs: Optional[torch.Tensor] = None,
+        generation_config: Optional[GenerationConfig] = None,
+        streamer = None,
+        **kwargs,
+    ):
+        if generation_config is None:
+            response = super().generate(
+                inputs,
+                generation_config=generation_config,
+                streamer=streamer,
+                **kwargs,
+            )
+
+            return response
+        repetition_penalty = kwargs.pop("repetition_penalty", generation_config.repetition_penalty)
+        generation_config.repetition_penalty = 1.0
+        
+        response = super().generate(
+            inputs,
+            generation_config=generation_config,
+            streamer=streamer,
+            **kwargs,
+        )
+        # generation_config.repetition_penalty = repetition_penalty
+        return response
 
 AutoConfig.register("buddygpt", GPTConfig)
 AutoModelForCausalLM.register(GPTConfig, BuddyGPT)
