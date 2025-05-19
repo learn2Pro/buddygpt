@@ -291,7 +291,6 @@ class BuddyGPT(PreTrainedModel):
             loss = F.cross_entropy(shape_logits, targets, ignore_index=-100)
         else:
             logits = self.lm_head(x) # B, 1, n_vocab
-            print(logits.shape)
             loss = None
         return CausalLMOutputWithPast(loss=loss, logits=logits) if loss else CausalLMOutputWithPast(logits=logits)
 
@@ -311,30 +310,17 @@ class BuddyGPT(PreTrainedModel):
     
     def generate(
         self,
-        inputs: Optional[torch.Tensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
         generation_config: Optional[GenerationConfig] = None,
         streamer = None,
         **kwargs,
     ):
-        if generation_config is None:
-            response = super().generate(
-                inputs,
-                generation_config=generation_config,
-                streamer=streamer,
-                **kwargs,
-            )
-
-            return response
-        repetition_penalty = kwargs.pop("repetition_penalty", generation_config.repetition_penalty)
-        generation_config.repetition_penalty = 1.0
-        
         response = super().generate(
-            inputs,
+            input_ids,
             generation_config=generation_config,
             streamer=streamer,
             **kwargs,
         )
-        # generation_config.repetition_penalty = repetition_penalty
         return response
 
 AutoConfig.register("buddygpt", GPTConfig)
