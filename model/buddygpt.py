@@ -8,8 +8,9 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from typing import Optional
 from transformers.generation import GenerationConfig
+from transformers.generation import utils
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = "cuda" if torch.cuda.is_available() else "cpu"
 FLASH = 0
 
 # # rope
@@ -32,14 +33,14 @@ FLASH = 0
 # def apply_rotary_emb(q, k, freqs):
 #     xq = torch.view_as_complex(q.view(*q.shape[:-1], -1, 2)) # batch, seq_len, n_head, dim//2
 #     xk = torch.view_as_complex(k.view(*k.shape[:-1], -1, 2)) # batch, seq_len, n_head, dim//2
-    
+
 #     freqs_cis = reshape_for_broadcast(freqs, xq) # freqs_cis.shape = (1,seq_len,1,dim)
 
 #     xq_out = torch.view_as_real(xq * freqs_cis).flatten(3) # batch, seq_len, n_head, dim
 #     xk_out = torch.view_as_real(xk * freqs_cis).flatten(3) # batch, seq_len, n_head, dim
 
 #     return xq_out.type_as(q), xk_out.type_as(k)
-    
+
 # class RotaryEmbedding(nn.Module):
 #     def __precompute_freqs_cis(self, dim, max_seq_len, theta):
 #         assert dim%2 == 0
@@ -48,7 +49,7 @@ FLASH = 0
 #         freqs = torch.outer(t, freqs) # (seq_len, dim/2)
 #         freqs = torch.polar(torch.ones_like(freqs), freqs) # cos(m*\theta) + jsin(m*\theat)
 #         return freqs
-        
+
 #     def __init__(self, dim, max_seq_len=2048, theta=10000.0):
 #         super().__init__()
 #         self.dim = dim
@@ -67,42 +68,44 @@ FLASH = 0
 #             return xq_out.to(torch.bfloat16), xk_out.to(torch.bfloat16)
 #         else:
 #             return xq_out.to(torch.bfloat16)
-            
+
+
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, theta=10000.0):
         super().__init__()
         self.dim = dim
-        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2)/dim))
-        self.register_buffer('inv_freq', inv_freq, persistent=False)
+        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2) / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def apply_rotary_emb(self, x):
         seq_len = x.shape[1]
         t = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)
-        freqs = torch.einsum('i,j->ij', t, self.inv_freq) # (seq_len, dim//2)
-        
-        cos = freqs.cos()[None,:,None,:] # (1, seq_len, 1, dim//2)
-        sin = freqs.sin()[None,:,None,:] # (1, seq_len, 1, dim//2)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim//2)
 
-        x1, x2 = x[...,::2], x[...,1::2]
+        cos = freqs.cos()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+        sin = freqs.sin()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+
+        x1, x2 = x[..., ::2], x[..., 1::2]
         x_rotated_even = x1 * cos - x2 * sin
-        x_rotated_odd =  x1 * sin + x2 * cos
+        x_rotated_odd = x1 * sin + x2 * cos
         x_out = torch.stack([x_rotated_even, x_rotated_odd], dim=-1)
         return x_out.flatten(-2)
+
 
 class GPTConfig(PretrainedConfig):
     model_type = "buddygpt"
 
     def __init__(
         self,
-        n_block= 1024,
-        n_layer= 16,
-        n_head= 16,
-        n_embed = 1536,
-        n_vocab = 21128,
-        n_kv_head = 8,
-        pad_token_id = 0,
-        eos_token_id = 0,
-        **kwargs
+        n_block=1024,
+        n_layer=16,
+        n_head=16,
+        n_embed=1536,
+        n_vocab=21128,
+        n_kv_head=8,
+        pad_token_id=0,
+        eos_token_id=0,
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.n_block = n_block
@@ -115,7 +118,6 @@ class GPTConfig(PretrainedConfig):
         self.eos_token_id = eos_token_id
 
 
-
 class SwiGLU(nn.Module):
     def __init__(self):
         super().__init__()
@@ -123,8 +125,8 @@ class SwiGLU(nn.Module):
     def forward(self, x):
         x1, x2 = x.chunk(2, dim=-1)  # split last dim into two
         return F.silu(x1) * x2  # silu == swish
-        
-        
+
+
 class GQA(nn.Module):
     def __init__(self, config, rope=None):
         super().__init__()
@@ -139,37 +141,48 @@ class GQA(nn.Module):
         self.v_proj = nn.Linear(self.n_embed, self.kv_head_dim)
         self.out_proj = nn.Linear(self.n_embed, self.n_embed)
         self.rope = RotaryEmbedding(self.head_dim) if rope is None else rope
-        self.register_buffer('tril', torch.tril(torch.ones(config.n_block, config.n_block)).view(1,1,config.n_block, config.n_block))
+        self.register_buffer(
+            "tril",
+            torch.tril(torch.ones(config.n_block, config.n_block)).view(
+                1, 1, config.n_block, config.n_block
+            ),
+        )
 
     def forward(self, x):
         B, T, _ = x.shape
-        q = self.q_proj(x).view(B, T, self.n_head, -1) # B, T, n_head, n_embed
-        k = self.k_proj(x).view(B, T, self.n_kv_head, -1) # B, T, n_kv_head, n_embed
-        v = self.v_proj(x).view(B, T, self.n_kv_head, -1) # B, T, n_kv_head, n_embed
+        q = self.q_proj(x).view(B, T, self.n_head, -1)  # B, T, n_head, n_embed
+        k = self.k_proj(x).view(B, T, self.n_kv_head, -1)  # B, T, n_kv_head, n_embed
+        v = self.v_proj(x).view(B, T, self.n_kv_head, -1)  # B, T, n_kv_head, n_embed
 
         xq, xk = self.rope.apply_rotary_emb(q), self.rope.apply_rotary_emb(k)
 
-        xq = xq.transpose(1, 2) # B, n_head, T, n_embed
-        xk = xk.transpose(1, 2) # B, n_kv_head, T, n_embed
-        xv = v.transpose(1, 2) # B, n_kv_head, T, n_embed
+        xq = xq.transpose(1, 2)  # B, n_head, T, n_embed
+        xk = xk.transpose(1, 2)  # B, n_kv_head, T, n_embed
+        xv = v.transpose(1, 2)  # B, n_kv_head, T, n_embed
 
         if self.repeat_factor > 1:
-            xk = xk.repeat_interleave(self.repeat_factor, dim=1) # B, n_head, T, n_embed
-            xv = xv.repeat_interleave(self.repeat_factor, dim=1) # B, n_head, T, n_embed
-        
+            xk = xk.repeat_interleave(
+                self.repeat_factor, dim=1
+            )  # B, n_head, T, n_embed
+            xv = xv.repeat_interleave(
+                self.repeat_factor, dim=1
+            )  # B, n_head, T, n_embed
+
         if FLASH:
             # print('this way')
-            o_attn = F.scaled_dot_product_attention(xq.contiguous(), xk.contiguous(), xv.contiguous(), is_causal=True)
+            o_attn = F.scaled_dot_product_attention(
+                xq.contiguous(), xk.contiguous(), xv.contiguous(), is_causal=True
+            )
         else:
             # print('this way2')
             qk = torch.matmul(xq, xk.transpose(-2, -1))
-            qk = qk.masked_fill(self.tril[:,:,:T,:T]==0, float('-inf'))
-            qk = F.softmax(qk, dim=-1) * (self.n_embed ** -0.5)
-            o_attn = qk @ xv # B, n_head, T, n_embed
+            qk = qk.masked_fill(self.tril[:, :, :T, :T] == 0, float("-inf"))
+            qk = F.softmax(qk, dim=-1) * (self.n_embed**-0.5)
+            o_attn = qk @ xv  # B, n_head, T, n_embed
         o_attn = o_attn.transpose(1, 2).contiguous().view(B, T, -1)
         return self.out_proj(o_attn)
 
-        
+
 class SelfCausalAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -179,26 +192,40 @@ class SelfCausalAttention(nn.Module):
         self.c_attn = nn.Linear(config.n_embed, 3 * config.n_embed)
         self.c_proj = nn.Linear(config.n_embed, config.n_embed)
         self.rope = RotaryEmbedding(dim=config.n_embed)
-        self.register_buffer('tril', torch.tril(torch.ones(config.n_block, config.n_block)).view(1,1,config.n_block,config.n_block))
+        self.register_buffer(
+            "tril",
+            torch.tril(torch.ones(config.n_block, config.n_block)).view(
+                1, 1, config.n_block, config.n_block
+            ),
+        )
 
     def forward(self, x):
         B, T, _ = x.size()
         attn = self.c_attn(x)
-        q, k, v = attn.split(self.n_embed, dim=-1) # B,n_block,n_embed
-        q = q.view(B, T, self.n_head, -1).transpose(1, 2) # B, n_head, n_block, n_embed//n_head
-        k = k.view(B, T, self.n_head, -1).transpose(1, 2) # B, n_head, n_block, n_embed//n_head
-        v = v.view(B, T, self.n_head, -1).transpose(1, 2) # B, n_head, n_block, n_embed//n_head
+        q, k, v = attn.split(self.n_embed, dim=-1)  # B,n_block,n_embed
+        q = q.view(B, T, self.n_head, -1).transpose(
+            1, 2
+        )  # B, n_head, n_block, n_embed//n_head
+        k = k.view(B, T, self.n_head, -1).transpose(
+            1, 2
+        )  # B, n_head, n_block, n_embed//n_head
+        v = v.view(B, T, self.n_head, -1).transpose(
+            1, 2
+        )  # B, n_head, n_block, n_embed//n_head
         q, k = self.rope.apply_rotary_emb(q, k, self.freqs_cis)
-        
+
         if FLASH:
-            o_attn = F.scaled_dot_product_attention(q.contiguous(), k.contiguous(), v.contiguous(), is_causal=True)
+            o_attn = F.scaled_dot_product_attention(
+                q.contiguous(), k.contiguous(), v.contiguous(), is_causal=True
+            )
         else:
             qk = q @ k.transpose(-2, -1)
-            qk = qk.masked_fill(self.tril[:,:,:T,:T] == 0, float('-inf'))
-            o_attn = (F.softmax(qk, dim=-1) * (self.n_embed ** -0.5)) @ v
+            qk = qk.masked_fill(self.tril[:, :, :T, :T] == 0, float("-inf"))
+            o_attn = (F.softmax(qk, dim=-1) * (self.n_embed**-0.5)) @ v
         o_attn = o_attn.transpose(1, 2).view(B, T, -1).contiguous()
         y = self.c_proj(o_attn)
         return y
+
 
 class MLP(nn.Module):
     def __init__(self, config):
@@ -214,6 +241,7 @@ class MLP(nn.Module):
         x = self.ln2(x)
         return x
 
+
 class Layer(nn.Module):
     def __init__(self, config, rope=None):
         super().__init__()
@@ -227,52 +255,60 @@ class Layer(nn.Module):
         x = x + self.mlp(self.post_norm(x))
         return x
 
+
 class BuddyGPT(PreTrainedModel):
     config_class = GPTConfig
     # 定义了模型内部子模块命名的基础前缀，当加载或保存模型时，这个前缀将用于识别模型主体部分。
     base_model_prefix = "model"
     # 表明该模型支持梯度检查点技术，这是一种内存优化策略，可减少模型训练时所需的显存
     supports_gradient_checkpointing = True
-    # Scaled Dot Product Attention (SDPA) 
+    # Scaled Dot Product Attention (SDPA)
     _supports_sdpa = True
     # 表示模型支持缓存机制，这在自回归模型（如Transformer解码器）中很常见，
     # 用于存储先前计算的结果以加快后续时间步长的计算速度。
     _supports_cache_class = True
-    
+
     def __init__(self, config):
         super().__init__(config)
         self.config = config
         self.n_vocab = config.n_vocab
         rope = RotaryEmbedding(config.n_embed // config.n_head)
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.n_vocab, config.n_embed, config.pad_token_id),
-            layers = nn.ModuleList([Layer(config, rope) for _ in range(config.n_layer)]),
-            ln_norm = nn.RMSNorm(config.n_embed),
-            # rope = rope,
-        ))
+        self.transformer = nn.ModuleDict(
+            dict(
+                wte=nn.Embedding(config.n_vocab, config.n_embed, config.pad_token_id),
+                layers=nn.ModuleList(
+                    [Layer(config, rope) for _ in range(config.n_layer)]
+                ),
+                ln_norm=nn.RMSNorm(config.n_embed),
+                # rope = rope,
+            )
+        )
 
         self.lm_head = nn.Linear(config.n_embed, config.n_vocab, bias=False)
         self.eos_token_id = config.eos_token_id
-        # self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
-        #  = 
+        self.pad_token_id = config.pad_token_id
+        # self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        #  =
         self.init_rng = torch.Generator()
         self.init_rng.manual_seed(42)
         self.apply(self._init_weights)
-        
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
-            std = 0.02 / (2*self.config.n_layer) ** 0.5
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std, generator=self.init_rng)
+            std = 0.02 / (2 * self.config.n_layer) ** 0.5
+            torch.nn.init.normal_(
+                module.weight, mean=0.0, std=std, generator=self.init_rng
+            )
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02, generator=self.init_rng)
+            torch.nn.init.normal_(
+                module.weight, mean=0.0, std=0.02, generator=self.init_rng
+            )
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-            
 
-    def forward(self, input_ids, labels=None, **kwargs):
+    def forward(self, input_ids, labels=None, attention_mask=None, **kwargs):
         input_ids = input_ids.to(device)
         B, T = input_ids.size()
         # pos = torch.arange(0, T, dtype=torch.long, device=device)
@@ -286,42 +322,76 @@ class BuddyGPT(PreTrainedModel):
         if labels is not None:
             labels = labels.to(device)
             logits = self.lm_head(x)
-            shape_logits = logits[:,:-1,:].contiguous().view(-1, self.n_vocab)
-            targets = labels[:,1:].contiguous().view(-1)
-            loss = F.cross_entropy(shape_logits, targets, ignore_index=-100)
+            shape_logits = logits[:, :-1, :].contiguous().view(-1, self.n_vocab)
+            targets = labels[:, 1:].contiguous().view(-1)
+            if attention_mask is None:
+                loss = F.cross_entropy(shape_logits, targets, ignore_index=-100)
+            else:
+                 # 计算每个token的交叉熵loss (未reduce)
+                loss = F.cross_entropy(shape_logits, targets, ignore_index=-100, reduction='none')
+                # print(attention_mask.shape)
+                mask_flat = attention_mask.view(-1).float()
+                target_length, current_length = loss.size(0), mask_flat.size(0)
+                if current_length >= target_length:
+                    extend_mask_flat = mask_flat[:target_length]
+                else:
+                    padding_mask = torch.full((target_length - current_length,), 0.0, dtype=mask_flat.dtype)
+                    extend_mask_flat = torch.cat([mask_flat, padding_mask], dim=0)
+                # 乘以mask，padding位置loss为0
+                loss = loss * extend_mask_flat
+                # 平均loss，只除以有效token数
+                loss = loss.sum() / extend_mask_flat.sum()
+                
         else:
-            logits = self.lm_head(x) # B, 1, n_vocab
+            logits = self.lm_head(x)  # B, seq_len, n_vocab
             loss = None
-        return CausalLMOutputWithPast(loss=loss, logits=logits) if loss else CausalLMOutputWithPast(logits=logits)
-
-    # @torch.no_grad()
-    # def generate(self, input_ids, max_length, temperature=1.0, **kwargs):
-    #     x = input_ids
-    #     for _ in range(max_length):
-    #         idx_cond = x if x.size(1)<=self.config.n_block else x[:, -self.config.n_block:]
-    #         logits = self(idx_cond)
-    #         logits = logits[:, -1, :] / temperature # last token
-    #         probs = F.softmax(logits, dim=-1) # B, n_vocab
-    #         predict = torch.multinomial(probs, num_samples=1) # B, 1
-    #         if self.eos_token_id and self.eos_token_id == predict.item():
-    #             return x
-    #         x = torch.cat([x, predict], dim=-1)
-    #     return x
-    
-    def generate(
-        self,
-        input_ids: Optional[torch.Tensor] = None,
-        generation_config: Optional[GenerationConfig] = None,
-        streamer = None,
-        **kwargs,
-    ):
-        response = super().generate(
-            input_ids,
-            generation_config=generation_config,
-            streamer=streamer,
-            **kwargs,
+        return (
+            CausalLMOutputWithPast(loss=loss, logits=logits)
+            if loss
+            else CausalLMOutputWithPast(logits=logits)
         )
-        return response
+
+    @torch.no_grad()
+    def generate(
+        self, input_ids, max_new_tokens=512, temperature=1.0, top_k=None, **kwargs
+    ):
+        x = input_ids
+        for _ in range(max_new_tokens):
+            idx_cond = (
+                x if x.size(1) <= self.config.n_block else x[:, -self.config.n_block:]
+            )
+            logits = self(idx_cond).logits
+            if temperature == 0.0:
+                # 当temperature为0时，选取概率最高的单一索引
+                _, predict = torch.topk(logits, k=1, dim=-1)
+            else:
+                logits = logits[:, -1, :] / temperature  # last token
+                # 如果指定了top_k参数，保留top_k个概率最高的选项
+                if top_k is not None:
+                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                    logits[logits < v[:, [-1]]] = float('-inf')
+                probs = F.softmax(logits, dim=-1)  # B, n_vocab
+                predict = torch.multinomial(probs, num_samples=1)  # B, 1
+
+            x = torch.cat([x, predict], dim=-1)
+            if self.eos_token_id and self.eos_token_id == predict[-1][-1].item():
+                break
+        return x
+
+    # def generate(
+    #     self,
+    #     input_ids: Optional[torch.Tensor] = None,
+    #     generation_config: Optional[GenerationConfig] = None,
+    #     streamer=None,
+    #     **kwargs,
+    # ):
+    #     return super().generate(
+    #         inputs=input_ids,
+    #         generation_config=generation_config,
+    #         streamer=streamer,
+    #         **kwargs,
+    #     )
+
 
 AutoConfig.register("buddygpt", GPTConfig)
 AutoModelForCausalLM.register(GPTConfig, BuddyGPT)

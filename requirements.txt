@@ -9,3 +9,4 @@ scikit-learn
 ipywidgets
 deepspeed
 numpy
+loguru
