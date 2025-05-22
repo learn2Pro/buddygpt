@@ -1,0 +1,955 @@
+"""
+Tiny LLM 模型架构
+
+到处抄，整体还是Llama2的模型架构
+"""
+
+import math
+import warnings
+from threading import Thread
+from typing import List, Optional, Tuple, Union
+
+import torch
+import torch.nn.functional as F
+import torch.utils.checkpoint
+from torch import nn
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+
+from transformers.activations import ACT2FN
+from transformers.cache_utils import Cache, DynamicCache
+from transformers.modeling_attn_mask_utils import (
+    _prepare_4d_causal_attention_mask,
+    _prepare_4d_causal_attention_mask_for_sdpa,
+)
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPast,
+    CausalLMOutputWithPast,
+    SequenceClassifierOutputWithPast,
+)
+from transformers.modeling_utils import PreTrainedModel
+from transformers.generation.utils import GenerationConfig
+from transformers.generation.logits_process import LogitsProcessorList
+
+from configuration_buddygpt import BuddyGPTConfig
+from loguru import logger
+
+# from generation_utils import TextIterStreamer, make_context, OutputRepetitionPenaltyLogitsProcessor, parse_pot_no_stream
+
+
+def report_memory(name):
+    """Simple GPU memory report."""
+    mega_bytes = 1024.0 * 1024.0
+    string = name + " memory (MB)"
+    # 变量分配显存
+    string += " | allocated: {}".format(torch.cuda.memory_allocated() / mega_bytes)
+    string += " | max allocated: {}".format(
+        torch.cuda.max_memory_allocated() / mega_bytes
+    )
+    # 缓存和变量分配显存，实际显存还需要+pytorch context
+    string += " | reserved: {}".format(torch.cuda.memory_reserved() / mega_bytes)
+    string += " | max reserved: {}".format(
+        torch.cuda.max_memory_reserved() / mega_bytes
+    )
+    try:
+        if torch.distributed.get_rank() == 0:
+            print(
+                "[Rank {}] {}".format(torch.distributed.get_rank(), string), flush=True
+            )
+            pass
+    except:
+        pass
+
+
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim, theta=10000.0):
+        super().__init__()
+        self.dim = dim
+        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2) / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def apply_rotary_emb(self, x):
+        seq_len = x.shape[1]
+        t = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim//2)
+
+        cos = freqs.cos()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+        sin = freqs.sin()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+
+        x1, x2 = x[..., ::2], x[..., 1::2]
+        x_rotated_even = x1 * cos - x2 * sin
+        x_rotated_odd = x1 * sin + x2 * cos
+        x_out = torch.stack([x_rotated_even, x_rotated_odd], dim=-1)
+        return x_out.flatten(-2)
+
+
+class GateMLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.act_fn = nn.SiLU()
+
+    def forward(self, x):
+        intermediate = self.act_fn(self.gate_proj(x)) * self.up_proj(x)
+        down_proj = self.down_proj(intermediate)
+        return down_proj
+
+
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    """
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(
+        batch, num_key_value_heads, n_rep, slen, head_dim
+    )
+    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
+class SelfAttention(nn.Module):
+    """多头注意力"""
+
+    def __init__(self, config: BuddyGPTConfig, layer_idx: Optional[int] = None):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+        if layer_idx is None:
+            logger.warning(
+                f"Instantiating {self.__class__.__name__} without passing `layer_idx` is not recommended and will "
+                "to errors during the forward call, if caching is used. Please make sure to provide a `layer_idx` "
+                "when creating this class."
+            )
+
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.head_dim = self.hidden_size // self.num_heads
+        self.num_key_value_heads = config.num_key_value_heads
+        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
+        self.num_seq_len = config.num_seq_len
+        self.rope_theta = config.rope_theta
+        # 因果自回归模式
+        self.is_causal = True
+        self.attention_dropout = config.attention_dropout
+
+        if (self.head_dim * self.num_heads) != self.hidden_size:
+            raise ValueError(
+                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
+                f" and `num_heads`: {self.num_heads})."
+            )
+        self.q_proj = nn.Linear(
+            self.hidden_size, self.num_heads * self.head_dim, bias=True
+        )
+        self.k_proj = nn.Linear(
+            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True
+        )
+        self.v_proj = nn.Linear(
+            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True
+        )
+        self.o_proj = nn.Linear(
+            self.num_heads * self.head_dim, self.hidden_size, bias=False
+        )
+
+        self.rotary_emb = RotaryEmbedding(
+            self.head_dim,
+            theta=self.rope_theta,
+        )
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        if "padding_mask" in kwargs:
+            warnings.warn(
+                "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
+            )
+        bsz, q_len, _ = hidden_states.size()
+
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        # 重新投影，变成多头注意力结构
+        query_states = query_states.view(
+            bsz, q_len, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+        key_states = key_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+        value_states = value_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        # 应用旋转位置编码到 qk 向量
+        query_states, key_states = self.rotary_emb.apply_rotary_emb(
+            query_states
+        ), self.rotary_emb.apply_rotary_emb(key_states)
+
+        # 如果存在缓存，则更新 kv
+        if past_key_value is not None:
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx
+            )
+
+        # repeat k/v heads if n_kv_heads < n_heads
+        # 如果 num_key_value_heads 小于 num_heads，则重复key和value向量以匹配头数量
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+        # 计算注意力权重
+        attn_weights = torch.matmul(
+            query_states, key_states.transpose(2, 3)
+        ) / math.sqrt(self.head_dim)
+
+        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+            raise ValueError(
+                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+                f" {attn_weights.size()}"
+            )
+
+        if attention_mask is not None:
+            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+                raise ValueError(
+                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                )
+
+            attn_weights = attn_weights + attention_mask
+
+        # softmax归一化注意力权重，并转换至float32类型以防止数值溢出
+        attn_weights = nn.functional.softmax(
+            attn_weights, dim=-1, dtype=torch.float32
+        ).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(
+            attn_weights, p=self.attention_dropout, training=self.training
+        )
+        # 注意力输出
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
+            raise ValueError(
+                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
+                f" {attn_output.size()}"
+            )
+
+        # 还原注意力输出的形状以与后续层对接
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+
+        # 通过o_proj层进一步处理注意力输出
+        attn_output = self.o_proj(attn_output)
+
+        if not output_attentions:
+            attn_weights = None
+
+        return attn_output, attn_weights, past_key_value
+
+
+class SdpaAttention(SelfAttention):
+    """使用 torch.nn.functional.scaled_dot_product_attention 实现的注意力模块。
+    该模块继承自 `SelfAttention`，因为模块的权重保持不变。唯一的变化在于前向传播过程中适应 SDPA API。
+    Scaled Dot Product Attention (SDPA)
+    """
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        # 当设置output_attentions=True时，由于torch.nn.functional.scaled_dot_product_attention不支持直接返回注意力权重
+        # 因此暂时降级回用父类的手动实现方式，并发出警告提示用户未来版本的更改要求
+        if output_attentions:
+            # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
+            logger.warning_once(
+                "Model is using SdpaAttention, but `torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to the manual attention implementation, "
+                'but specifying the manual implementation will be required from Transformers version v5.0.0 onwards. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
+            )
+            return super().forward(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_value,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+            )
+        # 获取输入维度信息
+        bsz, q_len, _ = hidden_states.size()  # (bsz, q_len, hidden_dim)
+
+        # 对输入进行线性映射得到query、key、value向量
+        query_states = self.q_proj(hidden_states)  # (bsz, q_len, n_head * head_dim)
+        key_states = self.k_proj(hidden_states)  # (bsz, q_len, n_kv_head * head_dim)
+        value_states = self.v_proj(hidden_states)  # (bsz, q_len, n_kv_head * head_dim)
+
+        # 将映射后的向量调整为多头注意力所需格式
+        query_states = query_states.view(
+            bsz, q_len, self.num_heads, self.head_dim
+        ).transpose(
+            1, 2
+        )  # (bsz, n_head, q_len, head_dim)
+        key_states = key_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(
+            1, 2
+        )  # (bsz, n_kv_head, q_len, head_dim)
+        value_states = value_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(
+            1, 2
+        )  # (bsz, n_kv_head, q_len, head_dim)
+
+        # 计算有效的 kv 序列长度（考虑缓存的情况）
+        kv_seq_len = key_states.shape[-2]  # q_len
+        if past_key_value is not None:
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+
+        # 应用旋转位置嵌入（RoPE）
+        # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        query_states, key_states = self.rotary_emb.apply_rotary_emb(
+            query_states
+        ), self.rotary_emb.apply_rotary_emb(key_states)
+
+        # 如果有缓存，更新key和value状态
+        if past_key_value is not None:
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
+
+        key_states = repeat_kv(
+            key_states, self.num_key_value_groups
+        )  # (bsz, n_head, q_len, head_dim)
+        value_states = repeat_kv(
+            value_states, self.num_key_value_groups
+        )  # (bsz, n_head, q_len, head_dim)
+
+        if attention_mask is not None:
+            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+                raise ValueError(
+                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                )
+
+        # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
+        # Reference: https://github.com/pytorch/pytorch/issues/112577.
+        if query_states.device.type == "cuda" and attention_mask is not None:
+            query_states = query_states.contiguous()
+            key_states = key_states.contiguous()
+            value_states = value_states.contiguous()
+
+        # 使用scaled_dot_product_attention进行计算
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=attention_mask,
+            dropout_p=self.attention_dropout if self.training else 0.0,
+            # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
+            is_causal=self.is_causal and attention_mask is None and q_len > 1,
+        )
+
+        # 还原注意力输出的形状
+        attn_output = attn_output.transpose(
+            1, 2
+        ).contiguous()  # (bsz, q_len, n_head, head_dim)
+        attn_output = attn_output.view(
+            bsz, q_len, self.hidden_size
+        )  # (bsz, q_len, hidden_dim)
+
+        # 将注意力输出通过最终的线性层（o_proj层）
+        attn_output = self.o_proj(attn_output)  # (bsz, q_len, hidden_dim)
+
+        return attn_output, None, past_key_value
+
+
+TINYLLM_ATTENTION_CLASSES = {
+    "eager": SelfAttention,
+    "sdpa": SdpaAttention,
+}
+
+
+class DecoderLayer(nn.Module):
+    def __init__(self, config: BuddyGPTConfig, layer_idx: int):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+
+        self.self_attn = (
+            SdpaAttention(config, layer_idx)
+            if config._attn_implementation == "sdpa"
+            else SelfAttention(config, layer_idx)
+        )
+        self.mlp = GateMLP(config)
+        self.input_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
+        **kwargs,
+    ) -> Tuple[
+        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
+    ]:
+        """
+        Args:
+            hidden_states (`torch.FloatTensor`): 输入形状 `(batch, seq_len, embed_dim)`
+            attention_mask (`torch.FloatTensor`, *optional*): attention mask 形状`(batch, sequence_length)`，
+                填充使用0表示
+            output_attentions (`bool`, *optional*): 是否返回所有注意力层的注意力张量。
+            use_cache (`bool`, *optional*): 如果设置为 `True`，则返回 `past_key_values` 关键值状态，可用于加速解码
+            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): 缓存的之前kv状态
+        """
+
+        residual = hidden_states
+
+        hidden_states = self.input_layernorm(hidden_states)
+
+        # Self Attention
+        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+        )
+        hidden_states = residual + hidden_states
+
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.post_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        outputs = (hidden_states,)
+
+        if output_attentions:
+            outputs += (self_attn_weights,)
+
+        if use_cache:
+            outputs += (present_key_value,)
+
+        return outputs
+
+
+class BuddyPreTrainedModel(PreTrainedModel):
+    config_class = BuddyGPTConfig
+    # 定义了模型内部子模块命名的基础前缀，当加载或保存模型时，这个前缀将用于识别模型主体部分。
+    base_model_prefix = "model"
+    # 表明该模型支持梯度检查点技术，这是一种内存优化策略，可减少模型训练时所需的显存
+    supports_gradient_checkpointing = True
+    # 指定了在序列化过程中不应被拆分的模块列表，即在模型保存与加载时保持这些模块作为一个整体。
+    _no_split_modules = ["DecoderLayer"]
+    # 在跨设备数据移动时，指示哪些关键字（key）对应的数据应该跳过设备放置步骤。
+    _skip_keys_device_placement = "past_key_values"
+    # Scaled Dot Product Attention (SDPA)
+    _supports_sdpa = True
+    # 表示模型支持缓存机制，这在自回归模型（如Transformer解码器）中很常见，
+    # 用于存储先前计算的结果以加快后续时间步长的计算速度。
+    _supports_cache_class = True
+
+    def _init_weights(self, module):
+        std = self.config.initializer_range
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+
+
+class BuddyGPTModel(BuddyPreTrainedModel):
+    """根据配置文件堆叠 DecoderLayer
+    Args:
+        config: BuddyGPTConfig
+    """
+
+    def __init__(self, config: BuddyGPTConfig):
+        super().__init__(config)
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.layers = nn.ModuleList([DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
+        self._attn_implementation = config._attn_implementation
+        self.norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        self.gradient_checkpointing = False
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.embed_tokens = value
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,  # 每个输入序列词元在位置嵌入中的位置索引
+        past_key_values: Optional[List[torch.FloatTensor]] = None,  # 可用于加速序列解码预先计算的隐藏状态（自注意力块和交叉注意力块中的键和值）
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, BaseModelOutputWithPast]:
+        output_attentions = (output_attentions if output_attentions is not None else self.config.output_attentions)
+        output_hidden_states = (output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states)
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+
+        return_dict = (return_dict if return_dict is not None else self.config.use_return_dict)
+
+        # retrieve input_ids and inputs_embeds
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError(
+                "You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time"
+            )
+        elif input_ids is not None:
+            batch_size, seq_length = input_ids.shape
+        elif inputs_embeds is not None:
+            batch_size, seq_length, _ = inputs_embeds.shape
+        else:
+            raise ValueError(
+                "You have to specify either decoder_input_ids or decoder_inputs_embeds"
+            )
+
+        if self.gradient_checkpointing and self.training:
+            if use_cache:
+                logger.warning_once(
+                    "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
+                )
+                use_cache = False
+
+        past_key_values_length = 0
+
+        if use_cache:
+            use_legacy_cache = not isinstance(past_key_values, Cache)
+            if use_legacy_cache:
+                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            past_key_values_length = past_key_values.get_usable_length(seq_length)
+
+        if position_ids is None:
+            device = input_ids.device if input_ids is not None else inputs_embeds.device
+            # 生成一个从past_key_values_length到seq_length + past_key_values_length的整数序列
+            position_ids = torch.arange(
+                past_key_values_length,
+                seq_length + past_key_values_length,
+                dtype=torch.long,
+                device=device,
+            )
+            # 将生成的序列重塑为形状为(1, seq_length)的张量，然后展平为形状为(-1, seq_length)的张量
+            position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+        else:
+            position_ids = position_ids.view(-1, seq_length).long()
+
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        # 适应不同注意力机制对注意力掩码的不同要求而设计的
+        if self._attn_implementation == "sdpa" and not output_attentions:
+            # output_attentions=True can not be supported when using SDPA, and we fall back on
+            # the manual implementation that requires a 4D causal mask in all cases.
+            attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+                attention_mask,
+                (batch_size, seq_length),
+                inputs_embeds,
+                past_key_values_length,
+            )
+        else:
+            # 4d mask is passed through the layers
+            attention_mask = _prepare_4d_causal_attention_mask(
+                attention_mask,
+                (batch_size, seq_length),
+                inputs_embeds,
+                past_key_values_length,
+            )
+
+        hidden_states = inputs_embeds
+
+        # decoder layers
+        all_hidden_states = () if output_hidden_states else None
+        all_self_attns = () if output_attentions else None
+        next_decoder_cache = None
+
+        for decoder_layer in self.layers:
+            # 1.隐藏状态保存
+            if output_hidden_states:
+                all_hidden_states += (hidden_states,)
+            # 2.梯度检查，方便在反向传播时只激活部分层，节省内存资源
+            # 3.解码层：
+            if self.gradient_checkpointing and self.training:
+                layer_outputs = self._gradient_checkpointing_func(
+                    decoder_layer.__call__,
+                    hidden_states,
+                    attention_mask,
+                    position_ids,
+                    past_key_values,
+                    output_attentions,
+                    use_cache,
+                )
+            else:
+                layer_outputs = decoder_layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                )
+            # 4.更新隐藏状态
+            hidden_states = layer_outputs[0]
+            # 5.更新缓存
+            if use_cache:
+                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+            # 6.注意力输出保存
+            if output_attentions:
+                all_self_attns += (layer_outputs[1],)
+
+        hidden_states = self.norm(hidden_states)
+
+        # add hidden states from the last decoder layer
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+
+        next_cache = None
+        if use_cache:
+            next_cache = (
+                next_decoder_cache.to_legacy_cache()
+                if use_legacy_cache
+                else next_decoder_cache
+            )
+
+        if not return_dict:
+            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=next_cache,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attns,
+        )
+
+
+class BuddyGPTForCausalLM(BuddyPreTrainedModel):
+    _tied_weights_keys = ["lm_head.weight"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.model = BuddyGPTModel(config)
+        self.vocab_size = config.vocab_size
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.model.embed_tokens = value
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def set_output_embeddings(self, new_embeddings):
+        self.lm_head = new_embeddings
+
+    def set_decoder(self, decoder):
+        self.model = decoder
+
+    def get_decoder(self):
+        return self.model
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+
+        output_attentions = (output_attentions if output_attentions is not None else self.config.output_attentions)
+        output_hidden_states = (output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states)
+        return_dict = (return_dict if return_dict is not None else self.config.use_return_dict)
+
+        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        hidden_states = outputs[0]
+        logits = self.lm_head(hidden_states)
+        logits = logits.float()
+
+        loss = None
+        if labels is not None:
+            # Shift so that tokens < n predict n
+            # 对于自回归模型（如GPT系列），我们需要将模型输出的logits向前移动一位，
+            # 这样使得模型预测的是当前时刻 t 的下一个词，而非当前词本身
+            shift_logits = logits[..., :-1, :].contiguous()
+            # 同时，也需要将真实标签（labels）向前移动一位以与调整后的logits对齐
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+
+            # 将移位后的 logits 和 labels 扁平化，即将它们展平为一维张量
+            # 其中shift_logits变成 (batch_size * sequence_length, vocab_size) 的形式
+            # shift_labels变为 (batch_size * sequence_length) 的形式
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+
+            # Enable model parallelism
+            # 确保模型并行计算时，labels的数据存储位置与logits一致
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = loss_fct(shift_logits, shift_labels)
+
+        if not return_dict:
+            output = (logits,) + outputs[1:]
+            return (loss,) + output if loss is not None else output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        **kwargs,
+    ):
+        """准备模型的输入参数
+        包括处理input_ids、past_key_values（历史隐藏状态缓存）、attention_mask以及可选的inputs_embeds。
+        """
+        # Omit tokens covered by past_key_values
+        if past_key_values is not None:
+            if isinstance(past_key_values, Cache):
+                cache_length = past_key_values.get_seq_length()
+                past_length = past_key_values.seen_tokens
+                max_cache_length = 2048
+            else:
+                cache_length = past_length = past_key_values[0][0].shape[2]
+                max_cache_length = None
+
+            # 根据缓存情况裁剪input_ids，只保留未处理的token：
+            # # 1. 如果 attention_mask 比 input_ids 更长，说明部分输入已通过缓存传递（如仅传入inputs_embeds）
+            if (
+                attention_mask is not None
+                and attention_mask.shape[1] > input_ids.shape[1]
+            ):
+                # 取最后未处理的部分
+                input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
+            # 2. 若已处理的 token 数小于input_ids中的总数，表明input_ids包含全部输入，从中去掉已处理的部分
+            elif past_length < input_ids.shape[1]:
+                input_ids = input_ids[:, past_length:]
+            # 3. 否则，认为input_ids中只有待处理的新token
+
+            # If we are about to go beyond the maximum cache length, we need to crop the input attention mask.
+            if (
+                max_cache_length is not None
+                and attention_mask is not None
+                and cache_length + input_ids.shape[1] > max_cache_length
+            ):
+                attention_mask = attention_mask[:, -max_cache_length:]
+
+        # 初始化或处理position_ids
+        position_ids = kwargs.get("position_ids", None)
+        # 如果attention_mask存在但position_ids不存在，则基于attention_mask动态创建position_ids
+        if attention_mask is not None and position_ids is None:
+            # create position_ids on the fly for batch generation
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -input_ids.shape[1] :]
+
+        # 根据inputs_embeds和past_key_values的存在与否来决定模型输入
+        # 如果提供了inputs_embeds且没有past_key_values（首次生成步骤），则直接使用inputs_embeds作为模型输入
+        if inputs_embeds is not None and past_key_values is None:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            model_inputs = {"input_ids": input_ids}
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": kwargs.get("use_cache"),
+                "attention_mask": attention_mask,
+            }
+        )
+        return model_inputs
+
+    @staticmethod
+    def _reorder_cache(past_key_values, beam_idx):
+        """用于重新排序缓存中的历史隐藏状态，以适应束搜索（beam search）算法"""
+        reordered_past = ()
+        # 遍历每一层的隐藏状态
+        for layer_past in past_key_values:
+            # 对于每一层的每个隐藏状态向量，执行索引选择操作
+            reordered_past += (
+                tuple(
+                    past_state.index_select(0, beam_idx.to(past_state.device))
+                    for past_state in layer_past
+                ),
+            )
+        return reordered_past
+
+    def generate(
+        self,
+        inputs: Optional[torch.Tensor] = None,
+        generation_config: Optional[GenerationConfig] = None,
+        streamer=None,
+        **kwargs,
+    ):
+        if generation_config is None:
+            response = super().generate(
+                inputs,
+                generation_config=generation_config,
+                streamer=streamer,
+                **kwargs,
+            )
+
+            return response
+        repetition_penalty = kwargs.pop(
+            "repetition_penalty", generation_config.repetition_penalty
+        )
+        generation_config.repetition_penalty = 1.0
+
+        logits_processor = None
+        if repetition_penalty > 1.0:
+            # warnings.warn("We highly recommend using OpenAI's frequency and presence penalty instead of the original repetition penalty. The original repetition penalty penalizes prompt tokens, which may lead to various potential issues. Therefore, your repetition penalty coefficient will be transformed into frequency penalty and presence penalty.", UserWarning)
+            presence_penalty = repetition_penalty - 1.0
+            frequency_penalty = repetition_penalty - 1.0
+            logits_processor = LogitsProcessorList(
+                [
+                    OutputRepetitionPenaltyLogitsProcessor(
+                        inputs.size(1), presence_penalty, frequency_penalty, 1.0
+                    )
+                ]
+            )
+
+        response = super().generate(
+            inputs,
+            generation_config=generation_config,
+            logits_processor=logits_processor,
+            streamer=streamer,
+            **kwargs,
+        )
+        generation_config.repetition_penalty = repetition_penalty
+        return response
+
+    # def chat(
+    #     self,
+    #     tokenizer,
+    #     messages: List[dict],
+    #     system: str = "你是由wdndev开发的个人助手。",
+    #     stream=False,
+    #     use_pot=False,
+    #     generation_config: Optional[GenerationConfig] = None,
+    # ):
+
+    #     generation_config = generation_config or self.generation_config
+    #     input_ids = make_context(
+    #         model=self,
+    #         tokenizer=tokenizer,
+    #         messages=messages,
+    #         system=system,
+    #         max_new_tokens=generation_config.max_new_tokens,
+    #     )
+
+    #     # for inputs in input_ids:
+    #     #     print("decode: ", tokenizer.decode(inputs))
+
+    #     if stream:
+    #         streamer = TextIterStreamer(
+    #             tokenizer, skip_prompt=True, skip_special_tokens=True, use_pot=use_pot
+    #         )
+    #         Thread(
+    #             target=self.generate,
+    #             kwargs=dict(
+    #                 inputs=input_ids,
+    #                 streamer=streamer,
+    #                 generation_config=generation_config,
+    #             ),
+    #         ).start()
+    #         return streamer
+    #     else:
+    #         generated_ids = self.generate(
+    #             input_ids, generation_config=generation_config
+    #         )
+    #         # response = tokenizer.decode(outputs[0][len(input_ids[0]):], skip_special_tokens=True)
+    #         generated_ids = [
+    #             output_ids[len(input_ids) :]
+    #             for input_ids, output_ids in zip(input_ids, generated_ids)
+    #         ]
+    #         response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[
+    #             0
+    #         ]
+    #         if use_pot:
+    #             response = parse_pot_no_stream(response)
+    #         return response
+
+
+from transformers import AutoConfig, AutoModelForCausalLM
+
+AutoConfig.register("buddygpt", BuddyGPTConfig)
+AutoModelForCausalLM.register(BuddyGPTConfig, BuddyGPTForCausalLM)
+# AutoModelForCausalLM = BuddyGPTForCausalLM
+
+
+def print_model_parameters(model):
+    """打印模型各个层参数"""
+    param_sum = 0
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            param_sum += param.numel()
+            print(f"Layer: {name}, Parameters: {param.numel()}")
+    print(f"Total of parameters: {param_sum}")
