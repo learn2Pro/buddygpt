@@ -60,26 +60,42 @@ def report_memory(name):
         pass
 
 
+import torch
+import torch.nn as nn
+
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, theta=10000.0):
+    def __init__(self, dim, n_seq, theta=10000.0):
         super().__init__()
         self.dim = dim
+        self.n_seq = n_seq
         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2) / dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.__cache_cos_sin()
 
-    def apply_rotary_emb(self, x):
-        seq_len = x.shape[1]
-        t = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)
+    def __cache_cos_sin(self):
+        seq_len = self.n_seq
+        t = torch.arange(seq_len, dtype=self.inv_freq.dtype) # (seq_len,)
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim//2)
+        emb = torch.cat([freqs, freqs], dim=-1)
 
-        cos = freqs.cos()[None, :, None, :]  # (1, seq_len, 1, dim//2)
-        sin = freqs.sin()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+        cos = emb.cos()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+        sin = emb.sin()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+        self.register_buffer('cos_emb', cos, persistent=False)
+        self.register_buffer('sin_emb', sin, persistent=False)
+        
+        
+    def rotate_half(self, x):
+        """Rotates half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
 
-        x1, x2 = x[..., ::2], x[..., 1::2]
-        x_rotated_even = x1 * cos - x2 * sin
-        x_rotated_odd = x1 * sin + x2 * cos
-        x_out = torch.stack([x_rotated_even, x_rotated_odd], dim=-1)
-        return x_out.flatten(-2)
+    def apply_rotary_emb(self, q, k):
+        seq_len = q.shape[1]
+        cos, sin = self.cos_emb[:seq_len].to(q.device), self.sin_emb[:seq_len].to(q.device)
+        q_out = (q * cos) + (self.rotate_half(q) * sin)
+        k_out = (k * cos) + (self.rotate_half(k) * sin)
+        return q_out, k_out
 
 
 class GateMLP(nn.Module):
@@ -107,9 +123,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(
-        batch, num_key_value_heads, n_rep, slen, head_dim
-    )
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -143,23 +157,12 @@ class SelfAttention(nn.Module):
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
                 f" and `num_heads`: {self.num_heads})."
             )
-        self.q_proj = nn.Linear(
-            self.hidden_size, self.num_heads * self.head_dim, bias=True
-        )
-        self.k_proj = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True
-        )
-        self.v_proj = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True
-        )
-        self.o_proj = nn.Linear(
-            self.num_heads * self.head_dim, self.hidden_size, bias=False
-        )
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=True)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
-        self.rotary_emb = RotaryEmbedding(
-            self.head_dim,
-            theta=self.rope_theta,
-        )
+        self.rotary_emb = RotaryEmbedding(self.head_dim, theta=self.rope_theta,)
 
     def forward(
         self,
@@ -182,15 +185,9 @@ class SelfAttention(nn.Module):
         value_states = self.v_proj(hidden_states)
 
         # 重新投影，变成多头注意力结构
-        query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-        value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
@@ -202,9 +199,7 @@ class SelfAttention(nn.Module):
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
         # 应用旋转位置编码到 qk 向量
-        query_states, key_states = self.rotary_emb.apply_rotary_emb(
-            query_states
-        ), self.rotary_emb.apply_rotary_emb(key_states)
+        query_states, key_states = self.rotary_emb.apply_rotary_emb(query_states, key_states)
 
         # 如果存在缓存，则更新 kv
         if past_key_value is not None:
@@ -237,12 +232,8 @@ class SelfAttention(nn.Module):
             attn_weights = attn_weights + attention_mask
 
         # softmax归一化注意力权重，并转换至float32类型以防止数值溢出
-        attn_weights = nn.functional.softmax(
-            attn_weights, dim=-1, dtype=torch.float32
-        ).to(query_states.dtype)
-        attn_weights = nn.functional.dropout(
-            attn_weights, p=self.attention_dropout, training=self.training
-        )
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         # 注意力输出
         attn_output = torch.matmul(attn_weights, value_states)
 
@@ -305,21 +296,9 @@ class SdpaAttention(SelfAttention):
         value_states = self.v_proj(hidden_states)  # (bsz, q_len, n_kv_head * head_dim)
 
         # 将映射后的向量调整为多头注意力所需格式
-        query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(
-            1, 2
-        )  # (bsz, n_head, q_len, head_dim)
-        key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(
-            1, 2
-        )  # (bsz, n_kv_head, q_len, head_dim)
-        value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(
-            1, 2
-        )  # (bsz, n_kv_head, q_len, head_dim)
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)  # (bsz, n_head, q_len, head_dim)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)  # (bsz, n_kv_head, q_len, head_dim)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)  # (bsz, n_kv_head, q_len, head_dim)
 
         # 计算有效的 kv 序列长度（考虑缓存的情况）
         kv_seq_len = key_states.shape[-2]  # q_len
@@ -328,9 +307,7 @@ class SdpaAttention(SelfAttention):
 
         # 应用旋转位置嵌入（RoPE）
         # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = self.rotary_emb.apply_rotary_emb(
-            query_states
-        ), self.rotary_emb.apply_rotary_emb(key_states)
+        query_states, key_states = self.rotary_emb.apply_rotary_emb(query_states, key_states)
 
         # 如果有缓存，更新key和value状态
         if past_key_value is not None:
@@ -338,12 +315,8 @@ class SdpaAttention(SelfAttention):
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
 
-        key_states = repeat_kv(
-            key_states, self.num_key_value_groups
-        )  # (bsz, n_head, q_len, head_dim)
-        value_states = repeat_kv(
-            value_states, self.num_key_value_groups
-        )  # (bsz, n_head, q_len, head_dim)
+        key_states = repeat_kv(key_states, self.num_key_value_groups)  # (bsz, n_head, q_len, head_dim)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)  # (bsz, n_head, q_len, head_dim)
 
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
@@ -370,12 +343,8 @@ class SdpaAttention(SelfAttention):
         )
 
         # 还原注意力输出的形状
-        attn_output = attn_output.transpose(
-            1, 2
-        ).contiguous()  # (bsz, q_len, n_head, head_dim)
-        attn_output = attn_output.view(
-            bsz, q_len, self.hidden_size
-        )  # (bsz, q_len, hidden_dim)
+        attn_output = attn_output.transpose(1, 2).contiguous()  # (bsz, q_len, n_head, head_dim)
+        attn_output = attn_output.view(bsz, q_len, self.hidden_size)  # (bsz, q_len, hidden_dim)
 
         # 将注意力输出通过最终的线性层（o_proj层）
         attn_output = self.o_proj(attn_output)  # (bsz, q_len, hidden_dim)
@@ -666,7 +635,10 @@ class BuddyGPTForCausalLM(BuddyPreTrainedModel):
         super().__init__(config)
         self.model = BuddyGPTModel(config)
         self.vocab_size = config.vocab_size
+        self.tie_word_embeddings = config.tie_word_embeddings
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        if self.tie_word_embeddings:
+            self.lm_head.weight = self.model.embed_tokens.weight
 
         # Initialize weights and apply final processing
         self.post_init()
