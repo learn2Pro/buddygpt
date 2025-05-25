@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer
-from configuration_buddygpt import BuddyGPTConfig
-from modeling_buddygpt import BuddyGPTForCausalLM
+from buddygpt import GPTConfig
+from buddygpt import BuddyGPT
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -14,18 +14,18 @@ block_size = 1024
 # gpt2
 tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen3-0.6B' ,trust_remote_code=True)
 # tokenizer.pad_token = tokenizer.eos_token
-config = BuddyGPTConfig(
-        hidden_size=1024,
-        num_hidden_layers=24,
-        num_attention_heads=16,
-        num_key_value_heads=8,
-        intermediate_size=2048,
-        rope_theta=10000.0,
-        num_seq_len=block_size,
-        vocab_size=len(tokenizer),
+config = GPTConfig(
+        n_block=1024,
+        n_layer=16,
+        n_head=16,
+        n_kv_head=8,
+        n_embed=1536,
+        n_vocab=151669,
+        pad_token_id=151643,
+        eos_token_id=151645,
         tie_word_embeddings=True,
     ) 
-model = BuddyGPTForCausalLM(config)
+model = GPTConfig(config)
 print(tokenizer.pad_token, tokenizer.pad_token_id)
 print(tokenizer.eos_token, tokenizer.eos_token_id)
 print(model)
