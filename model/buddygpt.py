@@ -286,8 +286,7 @@ class BuddyGPT(PreTrainedModel):
 
         self.lm_head = nn.Linear(config.n_embed, config.n_vocab, bias=False)
         self.eos_token_id = config.eos_token_id
-        self.pad_token_id = config.pad_token_id
-        # self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        # self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
         #  =
         self.init_rng = torch.Generator()
         self.init_rng.manual_seed(42)
@@ -308,7 +307,7 @@ class BuddyGPT(PreTrainedModel):
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
 
-    def forward(self, input_ids, labels=None, attention_mask=None, **kwargs):
+    def forward(self, input_ids, labels=None, **kwargs):
         input_ids = input_ids.to(device)
         B, T = input_ids.size()
         # pos = torch.arange(0, T, dtype=torch.long, device=device)
@@ -324,26 +323,9 @@ class BuddyGPT(PreTrainedModel):
             logits = self.lm_head(x)
             shape_logits = logits[:, :-1, :].contiguous().view(-1, self.n_vocab)
             targets = labels[:, 1:].contiguous().view(-1)
-            if attention_mask is None:
-                loss = F.cross_entropy(shape_logits, targets, ignore_index=-100)
-            else:
-                 # 计算每个token的交叉熵loss (未reduce)
-                loss = F.cross_entropy(shape_logits, targets, ignore_index=-100, reduction='none')
-                # print(attention_mask.shape)
-                mask_flat = attention_mask.view(-1).float()
-                target_length, current_length = loss.size(0), mask_flat.size(0)
-                if current_length >= target_length:
-                    extend_mask_flat = mask_flat[:target_length]
-                else:
-                    padding_mask = torch.full((target_length - current_length,), 0.0, dtype=mask_flat.dtype)
-                    extend_mask_flat = torch.cat([mask_flat, padding_mask], dim=0)
-                # 乘以mask，padding位置loss为0
-                loss = loss * extend_mask_flat
-                # 平均loss，只除以有效token数
-                loss = loss.sum() / extend_mask_flat.sum()
-                
+            loss = F.cross_entropy(shape_logits, targets, ignore_index=-100)
         else:
-            logits = self.lm_head(x)  # B, seq_len, n_vocab
+            logits = self.lm_head(x)  # B, 1, n_vocab
             loss = None
         return (
             CausalLMOutputWithPast(loss=loss, logits=logits)
@@ -358,7 +340,7 @@ class BuddyGPT(PreTrainedModel):
         x = input_ids
         for _ in range(max_new_tokens):
             idx_cond = (
-                x if x.size(1) <= self.config.n_block else x[:, -self.config.n_block:]
+                x if x.size(1) <= self.config.n_block else x[:, -self.config.n_block :]
             )
             logits = self(idx_cond).logits
             if temperature == 0.0:
@@ -396,3 +378,4 @@ class BuddyGPT(PreTrainedModel):
 AutoConfig.register("buddygpt", GPTConfig)
 AutoModelForCausalLM.register(GPTConfig, BuddyGPT)
 AutoModelForCausalLM = BuddyGPT
+
