@@ -25,6 +25,7 @@ class GPTConfig(PretrainedConfig):
         n_kv_head=8,
         pad_token_id=0,
         eos_token_id=0,
+        tie_word_embeddings=True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -36,6 +37,7 @@ class GPTConfig(PretrainedConfig):
         self.n_kv_head = n_kv_head
         self.pad_token_id = pad_token_id
         self.eos_token_id = eos_token_id
+        self.tie_word_embeddings = tie_word_embeddings
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -379,7 +381,8 @@ class BuddyGPT(PreTrainedModel):
 
         self.lm_head = nn.Linear(config.n_embed, config.n_vocab, bias=False)
         self.eos_token_id = config.eos_token_id
-        # self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
+        if config.tie_word_embeddings:
+            self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
         #  =
         self.init_rng = torch.Generator()
         self.init_rng.manual_seed(42)
