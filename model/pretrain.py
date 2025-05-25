@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 
 
-def load_model_tokenizer(tokenizer_name, seq_len,device):
+def load_model_tokenizer(tokenizer_name, seq_len, device, n_embed=1024, n_layer=24, n_head=16, n_kv_head=8):
     def print_parameters(model):
         num_param = sum(
             [param.numel() for param in model.parameters() if param.requires_grad]
@@ -21,13 +21,13 @@ def load_model_tokenizer(tokenizer_name, seq_len,device):
     # tokenizer.pad_token = tokenizer.eos_token
     config = GPTConfig(
         n_block=seq_len,
-        n_layer=16,
-        n_head=16,
-        n_kv_head=8,
-        n_embed=1536,
-        n_vocab=151669,
-        pad_token_id=151643,
-        eos_token_id=151645,
+        n_layer=n_layer,
+        n_head=n_head,
+        n_kv_head=n_kv_head,
+        n_embed=n_embed,
+        n_vocab=len(tokenizer),
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
         tie_word_embeddings=True,
     )
     model = BuddyGPT(config)
@@ -204,8 +204,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default='outputs/buddygpt-qwen3')
     parser.add_argument("--block_size", type=int, default=1024)
-    parser.add_argument("--per_device_train_batch_size", type=int, default=1)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=4)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=128)
     parser.add_argument("--num_train_epochs", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
