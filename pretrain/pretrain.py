@@ -1,27 +1,35 @@
-from typing import Optional
+from transformers import AutoTokenizer
+from configuration_buddygpt import BuddyGPTConfig
+from modeling_buddygpt import BuddyGPTForCausalLM
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from model import buddygpt
-from model.buddygpt import GPTConfig, BuddyGPT
-
 output_dir = f'outputs/buddygpt-qwen3'
-# THUDM/chatglm2-6b
+block_size = 1024
 # uer/gpt2-chinese-cluecorpussmall
-# Qwen/Qwen-1_8B
 # Qwen/Qwen3-0.6B
-# bert-base-chinese
-tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen3-0.6B', trust_remote_code=True)
+# gpt2
+tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen3-0.6B' ,trust_remote_code=True)
 # tokenizer.pad_token = tokenizer.eos_token
-# tokenizer.pad_token = tokenizer.eos_token
-# tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-config = GPTConfig(n_block=1024, n_embed=1024, n_head=16, n_layer=16, n_vocab=len(tokenizer), n_kv_head=8)
-model = BuddyGPT(config)
+config = BuddyGPTConfig(
+        hidden_size=1024,
+        num_hidden_layers=24,
+        num_attention_heads=16,
+        num_key_value_heads=8,
+        intermediate_size=2048,
+        rope_theta=10000.0,
+        num_seq_len=block_size,
+        vocab_size=len(tokenizer),
+        tie_word_embeddings=True,
+    ) 
+model = BuddyGPTForCausalLM(config)
+print(tokenizer.pad_token, tokenizer.pad_token_id)
+print(tokenizer.eos_token, tokenizer.eos_token_id)
 print(model)
+
 
 def print_parameters(model):
     num_param = sum([param.numel() for param in model.parameters() if param.requires_grad])
@@ -31,12 +39,18 @@ def sample(model, query, max_length=50):
     input_ids = tokenizer.encode(query, return_tensors="pt").to(model.device)
     output = model.generate(
         input_ids=input_ids,
-        max_length=max_length,
+        max_new_tokens=max_length,
     )
     gen_text = tokenizer.decode(output[0], skip_special_tokens=True)
     return gen_text
 
+model.to(device)
 print_parameters(model)
+sample(model, '中国首都是哪?')
+# print(sum([p.numel() for p in model.parameters()]) / 1024 / 1024)
+
+
+## load dataset
 
 from datasets import load_dataset, concatenate_datasets
 # 50m model need 20*50m = 1B token
@@ -46,18 +60,20 @@ from datasets import load_dataset, concatenate_datasets
 
 # Total tokens: 1872137976
 # 1.8B token
-ds = load_dataset("wikimedia/wikipedia", "20231101.zh", split="train")
-# 10B token * 10% = 1B token
-# 10B token * 50% = 5B token
+ds = load_dataset("pleisto/wikipedia-cn-20230720-filtered", split="train")
+# zhihu instruction
+zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
+# 10B token
 web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
 # firefly ds
 # 13B token
 ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
-
+# novel ds
+novel_ds = load_dataset("wdndev/webnovel-chinese", split="train")
 
 # 拼接并切块
 def group_texts_with_padding(examples):
-    block_size = config.n_block
+    # block_size = block_size
     concatenated = sum(examples["input_ids"], [])
     # result = {"input_ids": []}
     total_length = len(concatenated)
@@ -65,102 +81,67 @@ def group_texts_with_padding(examples):
         "input_ids": [concatenated[i:i+block_size] for i in range(0, total_length, block_size)]
     }
     return result
-    
-def encode(examples):
-    result = tokenizer(examples['text'])
+
+def encode(examples, field: str = 'text'):
+    result = tokenizer(examples[field])
     return result
 
-ds = ds.map(encode, batched=True, num_proc=30, remove_columns=ds.column_names)
+def encode_instruction(examples):
+    input_ids = []
+    attention_mask = []
+    for i in range(len(examples['INSTRUCTION'])):
+        instruction = examples['INSTRUCTION'][i]
+        response = examples['RESPONSE'][i]
+        build_instruction = f"### Instruction:\n{instruction}\n### Response:\n{response}"
+        tokenized_instruction = tokenizer(build_instruction)
+        input_ids.append(tokenized_instruction['input_ids'])
+        attention_mask.append(tokenized_instruction['attention_mask'])
+    result = {}
+    result['input_ids'] = input_ids
+    result['attention_mask'] = attention_mask
+    return result
+
+ds = ds.map(lambda x: encode(x, 'completion'), batched=True, num_proc=30, remove_columns=ds.column_names)
 ds = ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=ds.column_names)
+zhihu_ds = zhihu_ds.map(encode_instruction, batched=True, num_proc=30, remove_columns=zhihu_ds.column_names)
+zhihu_ds = zhihu_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=zhihu_ds.column_names)
 ff_ds = ff_ds.map(encode, batched=True, num_proc=30, remove_columns=ff_ds.column_names)
 ff_ds = ff_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=ff_ds.column_names)
+novel_ds = novel_ds.map(encode, batched=True, num_proc=30, remove_columns=novel_ds.column_names)
+novel_ds = novel_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=novel_ds.column_names)
 # web_ds = web_ds.map(encode, batched=True, num_proc=30, remove_columns=web_ds.column_names)
 # web_ds = web_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=web_ds.column_names)
-ds = concatenate_datasets([ds, ff_ds])
-ds
-
-# ds['input_ids']
-
-# Load the "all" subset or a specific subject like "computer_science"
-cmmlu = load_dataset("haonan-li/cmmlu", "high_school_geography", split='dev')
-
-# We'll use the validation set
-# eval_ds = cmmlu["validation"]
-def preprocess(example):
-    question = example["Question"]
-    choices = example["A"], example["B"], example["C"], example["D"]
-    context = f"{question}\nA. {choices[0]}\nB. {choices[1]}\nC. {choices[2]}\nD. {choices[3]}\n答案是:"
-
-    result =  tokenizer(context, truncation=True, padding="max_length", max_length=512)
-    result['labels'] = tokenizer.encode(example['Answer'])
-    return result
-
-eval_ds = cmmlu.map(preprocess)
-print(eval_ds[0])
-
-from sklearn.metrics import accuracy_score
-import numpy as np
-
-def compute_metrics(eval_preds):
-    logits, labels = eval_preds
-    # print(labels)
-    preds = np.argmax(logits, axis=-1)
-    acc = (preds == labels).mean()
-    return {"accuracy": acc}
-
-'''
-accelerate launch --config_file ptrain.yaml --num_processes=1 pretrain.py
-'''
+ds = concatenate_datasets([ds, ff_ds, novel_ds, zhihu_ds])
+print(ds)
 
 
-@dataclass
-class BuddyArguments:
-    """ 模型相关参数
-    """
-    push_to_hub : Optional[str] = field(
-        default=None, 
-        metadata={"help": "if push to huggingface"}
-    )
-
-def main():
-    from transformers import TrainingArguments, Trainer, TrainerCallback, DataCollatorForLanguageModeling, HfArgumentParser
+def main(**kwargs):
+    from transformers import TrainingArguments, Trainer, TrainerCallback, DataCollatorForLanguageModeling, DataCollatorForSeq2Seq
     from datetime import datetime
 
-    parser = HfArgumentParser((BuddyArguments, TrainingArguments))
-    buddy_args, training_args = parser.parse_args_and_config()
     # TF32 设置（建议启用）
     # torch.backends.cuda.matmul.allow_tf32 = True
     # torch.set_float32_matmul_precision("high")
 
     # print(sample(model, '中国首都是哪?'))
-    buddygpt.FLASH = 1
+    # buddygpt.FLASH = 1
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     class SampleTextCallback(TrainerCallback):
         def on_log(self, args, state, control, logs=None, **kwargs):
             if state.global_step % 100 == 0:
                 prompt = "中国首都是哪?"
-                input_ids = tokenizer.encode(prompt, return_tensors="pt").to(model.device)
-                output = model.generate(
-                    input_ids=input_ids,
-                    max_length=128,
-                )
-                gen_text = tokenizer.decode(output[0], skip_special_tokens=True)
+                gen_text = sample(model, prompt, max_length=128)
                 print(f"\n[Sample generated at step {state.global_step}]:\n{gen_text}\n")
-            
+
             if state.global_step % 100 == 0:
                 prompt = "which is the capital of china?"
-                input_ids = tokenizer.encode(prompt, return_tensors="pt").to(model.device)
-                output = model.generate(
-                    input_ids=input_ids,
-                    max_length=128,
-                )
-                gen_text = tokenizer.decode(output[0], skip_special_tokens=True)
+                gen_text = sample(model, prompt, max_length=128)
                 print(f"\n[Sample generated at step {state.global_step}]:\n{gen_text}\n")
-    
+
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer, mlm=False,
     )
-    
+
     # 创建 collator
     # data_collator = DataCollatorForSeq2Seq(
     #     tokenizer=tokenizer,
@@ -168,7 +149,7 @@ def main():
     #     label_pad_token_id=-100,  # 默认是 -100，loss 不计算这个 token
     #     padding=True
     # )
-    
+
     # TL;DR
     # Action	Why
     # ✅ max_grad_norm=1.0	Clip exploding gradients
@@ -176,16 +157,16 @@ def main():
     # ✅ Increase warmup_steps	Stabilize early training
     # ✅ Use gradient_accumulation_steps	Smooth out spikes
     # ✅ Monitor layers with high grad norm	Find root cause
-    
+
     args = TrainingArguments(
         run_name=f'buddygpt-{now}',
         output_dir=output_dir,
-        learning_rate=1e-4,
+        learning_rate=2e-5,
         adam_beta1 = 0.9,
         adam_beta2 = 0.99,
         weight_decay = 0.1,
         warmup_ratio = 0.2,
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=5,
         per_device_eval_batch_size=8,
         num_train_epochs=1,
         logging_steps=50,
@@ -198,27 +179,23 @@ def main():
         max_grad_norm=1.0,
         # gradient_checkpointing=True,
         gradient_accumulation_steps=128,
-        eval_strategy="steps",  # or eval_strategy="steps" in newer versions
-        eval_steps=500,              # Correct parameter name
-        # save_safetensors=False,
+        # eval_strategy="steps",  # or eval_strategy="steps" in newer versions
+        # eval_steps=500,              # Correct parameter name
+        save_safetensors=True,
     )
-    
+
     trainer = Trainer(
         model=model,
         args=args,
         train_dataset=ds,
-        eval_dataset=eval_ds,
         callbacks=[SampleTextCallback],
         data_collator=data_collator,
-        compute_metrics=compute_metrics,
+        # compute_metrics=compute_metrics,
     )
-    
+
     trainer.train()
-    # trainer.save_model(output_dir)
-    # model.save_pretrained(f'{output_dir}/final')
-    # tokenizer.save_pretrained(f'{output_dir}/final')
-    if buddy_args.push_to_hub:
-        trainer.push_to_hub(buddy_args.push_to_hub)
+    trainer.save_model(output_dir)
+
 
 if __name__ == "__main__":
     main()

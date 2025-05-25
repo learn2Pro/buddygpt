@@ -27,13 +27,13 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutputWithPast,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.generation.utils import GenerationConfig
+from transformers.generation.utils import GenerationConfig, GenerationMixin
 from transformers.generation.logits_process import LogitsProcessorList
 
 from configuration_buddygpt import BuddyGPTConfig
 from loguru import logger
 
-# from generation_utils import TextIterStreamer, make_context, OutputRepetitionPenaltyLogitsProcessor, parse_pot_no_stream
+from generation_utils import TextIterStreamer, make_context, OutputRepetitionPenaltyLogitsProcessor, parse_pot_no_stream
 
 
 def report_memory(name):
@@ -60,27 +60,129 @@ def report_memory(name):
         pass
 
 
-class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, theta=10000.0):
+import torch
+import torch.nn as nn
+
+# class RotaryEmbedding(nn.Module):
+#     def __init__(self, dim, n_seq, theta=10000.0):
+#         super().__init__()
+#         self.dim = dim
+#         self.n_seq = n_seq
+#         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2) / dim))
+#         self.register_buffer("inv_freq", inv_freq, persistent=False)
+#         self.__cache_cos_sin()
+
+#     def __cache_cos_sin(self):
+#         seq_len = self.n_seq
+#         t = torch.arange(seq_len, dtype=self.inv_freq.dtype) # (seq_len,)
+#         freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim//2)
+#         emb = torch.cat([freqs, freqs], dim=-1)
+
+#         cos = emb.cos()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+#         sin = emb.sin()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+#         self.register_buffer('cos_emb', cos, persistent=False)
+#         self.register_buffer('sin_emb', sin, persistent=False)
+        
+        
+#     def rotate_half(self, x):
+#         """Rotates half the hidden dims of the input."""
+#         x1 = x[..., : x.shape[-1] // 2]
+#         x2 = x[..., x.shape[-1] // 2 :]
+#         return torch.cat((-x2, x1), dim=-1)
+
+#     def apply_rotary_emb(self, q, k):
+#         seq_len = q.shape[1]
+#         cos, sin = self.cos_emb[:,:seq_len,:,:].to(q.device), self.sin_emb[:,:seq_len,:,:].to(q.device)
+#         print(cos.shape, sin.shape)
+#         print(q.shape, k.shape)
+#         q_out = (q * cos) + (self.rotate_half(q) * sin)
+#         k_out = (k * cos) + (self.rotate_half(k) * sin)
+#         return q_out, k_out
+
+class TinyllmRotaryEmbedding(nn.Module):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+        """ 旋转位置编码
+            - dim (int): 旋转嵌入的维度大小。
+            - max_position_embeddings (int): 预计算的最大位置嵌入数，默认为2048。
+            - base (int): 用于计算逆频率的基本频率，默认为10000。
+        """
         super().__init__()
+
         self.dim = dim
-        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2) / dim))
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+        # 计算逆频率值，并将其注册为模型的缓冲区
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(device) / self.dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
-    def apply_rotary_emb(self, x):
-        seq_len = x.shape[1]
-        t = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim//2)
+        # 为了支持`torch.jit.trace`功能，立即计算预存储的余弦和正弦缓存
+        self._set_cos_sin_cache(
+            seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
+        )
 
-        cos = freqs.cos()[None, :, None, :]  # (1, seq_len, 1, dim//2)
-        sin = freqs.sin()[None, :, None, :]  # (1, seq_len, 1, dim//2)
+    def _set_cos_sin_cache(self, seq_len, device, dtype):
+        """ 预计算的余弦和正弦缓存
+        """
+        self.max_seq_len_cached = seq_len
+        # 创建一个从0到最大序列长度-1的整数张量，与 inv_freq 具有相同的设备和数据类型
+        t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(self.inv_freq)
 
-        x1, x2 = x[..., ::2], x[..., 1::2]
-        x_rotated_even = x1 * cos - x2 * sin
-        x_rotated_odd = x1 * sin + x2 * cos
-        x_out = torch.stack([x_rotated_even, x_rotated_odd], dim=-1)
-        return x_out.flatten(-2)
+        # 计算每个位置与每个维度的频率，形成频谱矩阵
+        freqs = torch.outer(t, self.inv_freq)
+        
+        # 不同于论文中的实现，这里采用了不同的排列方式以获得相同的计算结果
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
 
+    def forward(self, x, seq_len=None):
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        if seq_len > self.max_seq_len_cached:
+            self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+
+        return (
+            self.cos_cached[:seq_len].to(dtype=x.dtype),
+            self.sin_cached[:seq_len].to(dtype=x.dtype),
+        )
+
+def rotate_half(x):
+    """ 旋转输入一半的 hidden dim
+    """
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+# Copied from transformers.models.mistral.modeling_mistral.apply_rotary_pos_emb
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+    """ 在 qk 应用旋转位置编码
+
+    Args:
+        q (`torch.Tensor`): q
+        k (`torch.Tensor`): k
+        cos (`torch.Tensor`): 旋转位置嵌入的余弦部分
+        sin (`torch.Tensor`): 旋转位置嵌入的正弦部分
+        position_ids (`torch.Tensor`): 与q和k对应位置的标记索引。例如，在处理KV缓存时，可以使用偏移过的位置ID。
+        unsqueeze_dim (`int`, *optional*, defaults to 1): 'unsqueeze_dim' 参数指定了沿哪个维度对 cos[position_ids] 
+            和 sin[position_ids] 进行扩展，以便它们能够适当地广播到 q 和 k 的维度上。
+            例如，注意 cos[position_ids] 和 sin[position_ids] 具有形状 [batch_size, seq_len, head_dim]。
+            那么，如果 q 和 k 的形状分别为 [batch_size, heads, seq_len, head_dim]，
+            则设置 unsqueeze_dim=1 可使 cos[position_ids] 和 sin[position_ids] 可以广播到 q 和 k 的形状上。
+            同样地，如果 q 和 k 的形状为 [batch_size, seq_len, heads, head_dim]，则应将 unsqueeze_dim 设置为 2
+    Returns:
+        包含使用旋转位置嵌入变换后的q和k张量的 `tuple(torch.Tensor)`。
+    """
+    # print("ori cos: ", cos.shape)
+    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+
+    # print("q: ", q.shape)
+    # print("cos: ", cos.shape)
+    # print("sin: ", sin.shape)
+    # print("rotate_half: ", rotate_half(q).shape)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
 
 class GateMLP(nn.Module):
     def __init__(self, config):
@@ -107,9 +209,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(
-        batch, num_key_value_heads, n_rep, slen, head_dim
-    )
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -143,22 +243,15 @@ class SelfAttention(nn.Module):
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
                 f" and `num_heads`: {self.num_heads})."
             )
-        self.q_proj = nn.Linear(
-            self.hidden_size, self.num_heads * self.head_dim, bias=True
-        )
-        self.k_proj = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True
-        )
-        self.v_proj = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True
-        )
-        self.o_proj = nn.Linear(
-            self.num_heads * self.head_dim, self.hidden_size, bias=False
-        )
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=True)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
-        self.rotary_emb = RotaryEmbedding(
+        self.rotary_emb = TinyllmRotaryEmbedding(
             self.head_dim,
-            theta=self.rope_theta,
+            max_position_embeddings=self.num_seq_len,
+            base=self.rope_theta,
         )
 
     def forward(
@@ -182,15 +275,9 @@ class SelfAttention(nn.Module):
         value_states = self.v_proj(hidden_states)
 
         # 重新投影，变成多头注意力结构
-        query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-        value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
@@ -202,9 +289,9 @@ class SelfAttention(nn.Module):
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
         # 应用旋转位置编码到 qk 向量
-        query_states, key_states = self.rotary_emb.apply_rotary_emb(
-            query_states
-        ), self.rotary_emb.apply_rotary_emb(key_states)
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        # query_states, key_states = self.rotary_emb.apply_rotary_emb(query_states, key_states)
 
         # 如果存在缓存，则更新 kv
         if past_key_value is not None:
@@ -237,12 +324,8 @@ class SelfAttention(nn.Module):
             attn_weights = attn_weights + attention_mask
 
         # softmax归一化注意力权重，并转换至float32类型以防止数值溢出
-        attn_weights = nn.functional.softmax(
-            attn_weights, dim=-1, dtype=torch.float32
-        ).to(query_states.dtype)
-        attn_weights = nn.functional.dropout(
-            attn_weights, p=self.attention_dropout, training=self.training
-        )
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         # 注意力输出
         attn_output = torch.matmul(attn_weights, value_states)
 
@@ -305,45 +388,29 @@ class SdpaAttention(SelfAttention):
         value_states = self.v_proj(hidden_states)  # (bsz, q_len, n_kv_head * head_dim)
 
         # 将映射后的向量调整为多头注意力所需格式
-        query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(
-            1, 2
-        )  # (bsz, n_head, q_len, head_dim)
-        key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(
-            1, 2
-        )  # (bsz, n_kv_head, q_len, head_dim)
-        value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(
-            1, 2
-        )  # (bsz, n_kv_head, q_len, head_dim)
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)  # (bsz, n_head, q_len, head_dim)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)  # (bsz, n_kv_head, q_len, head_dim)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)  # (bsz, n_kv_head, q_len, head_dim)
 
         # 计算有效的 kv 序列长度（考虑缓存的情况）
         kv_seq_len = key_states.shape[-2]  # q_len
         if past_key_value is not None:
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
 
-        # 应用旋转位置嵌入（RoPE）
-        # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = self.rotary_emb.apply_rotary_emb(
-            query_states
-        ), self.rotary_emb.apply_rotary_emb(key_states)
+        # 应用旋转位置编码到 qk 向量
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+
 
         # 如果有缓存，更新key和value状态
         if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
 
-        key_states = repeat_kv(
-            key_states, self.num_key_value_groups
-        )  # (bsz, n_head, q_len, head_dim)
-        value_states = repeat_kv(
-            value_states, self.num_key_value_groups
-        )  # (bsz, n_head, q_len, head_dim)
+        key_states = repeat_kv(key_states, self.num_key_value_groups)  # (bsz, n_head, q_len, head_dim)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)  # (bsz, n_head, q_len, head_dim)
 
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
@@ -370,12 +437,8 @@ class SdpaAttention(SelfAttention):
         )
 
         # 还原注意力输出的形状
-        attn_output = attn_output.transpose(
-            1, 2
-        ).contiguous()  # (bsz, q_len, n_head, head_dim)
-        attn_output = attn_output.view(
-            bsz, q_len, self.hidden_size
-        )  # (bsz, q_len, hidden_dim)
+        attn_output = attn_output.transpose(1, 2).contiguous()  # (bsz, q_len, n_head, head_dim)
+        attn_output = attn_output.view(bsz, q_len, self.hidden_size)  # (bsz, q_len, hidden_dim)
 
         # 将注意力输出通过最终的线性层（o_proj层）
         attn_output = self.o_proj(attn_output)  # (bsz, q_len, hidden_dim)
@@ -659,14 +722,17 @@ class BuddyGPTModel(BuddyPreTrainedModel):
         )
 
 
-class BuddyGPTForCausalLM(BuddyPreTrainedModel):
+class BuddyGPTForCausalLM(BuddyPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
         super().__init__(config)
         self.model = BuddyGPTModel(config)
         self.vocab_size = config.vocab_size
+        self.tie_word_embeddings = config.tie_word_embeddings
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        if self.tie_word_embeddings:
+            self.lm_head.weight = self.model.embed_tokens.weight
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -841,12 +907,12 @@ class BuddyGPTForCausalLM(BuddyPreTrainedModel):
                 ),
             )
         return reordered_past
-
+        
     def generate(
         self,
         inputs: Optional[torch.Tensor] = None,
         generation_config: Optional[GenerationConfig] = None,
-        streamer=None,
+        streamer = None,
         **kwargs,
     ):
         if generation_config is None:
@@ -858,24 +924,18 @@ class BuddyGPTForCausalLM(BuddyPreTrainedModel):
             )
 
             return response
-        repetition_penalty = kwargs.pop(
-            "repetition_penalty", generation_config.repetition_penalty
-        )
+        repetition_penalty = kwargs.pop("repetition_penalty", generation_config.repetition_penalty)
         generation_config.repetition_penalty = 1.0
 
         logits_processor = None
         if repetition_penalty > 1.0:
             # warnings.warn("We highly recommend using OpenAI's frequency and presence penalty instead of the original repetition penalty. The original repetition penalty penalizes prompt tokens, which may lead to various potential issues. Therefore, your repetition penalty coefficient will be transformed into frequency penalty and presence penalty.", UserWarning)
-            presence_penalty = repetition_penalty - 1.0
+            presence_penalty  = repetition_penalty - 1.0
             frequency_penalty = repetition_penalty - 1.0
             logits_processor = LogitsProcessorList(
-                [
-                    OutputRepetitionPenaltyLogitsProcessor(
-                        inputs.size(1), presence_penalty, frequency_penalty, 1.0
-                    )
-                ]
+                [OutputRepetitionPenaltyLogitsProcessor(inputs.size(1), presence_penalty, frequency_penalty, 1.0)]
             )
-
+        
         response = super().generate(
             inputs,
             generation_config=generation_config,
@@ -885,54 +945,40 @@ class BuddyGPTForCausalLM(BuddyPreTrainedModel):
         )
         generation_config.repetition_penalty = repetition_penalty
         return response
-
+    
     # def chat(
-    #     self,
-    #     tokenizer,
-    #     messages: List[dict],
+    #     self, 
+    #     tokenizer, 
+    #     messages: List[dict], 
     #     system: str = "你是由wdndev开发的个人助手。",
-    #     stream=False,
+    #     stream=False, 
     #     use_pot=False,
-    #     generation_config: Optional[GenerationConfig] = None,
+    #     generation_config: Optional[GenerationConfig]=None
     # ):
-
+        
     #     generation_config = generation_config or self.generation_config
     #     input_ids = make_context(
-    #         model=self,
-    #         tokenizer=tokenizer,
-    #         messages=messages,
-    #         system=system,
-    #         max_new_tokens=generation_config.max_new_tokens,
+    #         model=self, tokenizer=tokenizer, messages=messages,
+    #         system=system, max_new_tokens=generation_config.max_new_tokens
     #     )
 
     #     # for inputs in input_ids:
     #     #     print("decode: ", tokenizer.decode(inputs))
-
+        
     #     if stream:
-    #         streamer = TextIterStreamer(
-    #             tokenizer, skip_prompt=True, skip_special_tokens=True, use_pot=use_pot
-    #         )
-    #         Thread(
-    #             target=self.generate,
-    #             kwargs=dict(
-    #                 inputs=input_ids,
-    #                 streamer=streamer,
-    #                 generation_config=generation_config,
-    #             ),
-    #         ).start()
+    #         streamer = TextIterStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, use_pot=use_pot)
+    #         Thread(target=self.generate, kwargs=dict(
+    #             inputs=input_ids, streamer=streamer,
+    #             generation_config=generation_config,
+    #         )).start()
     #         return streamer
     #     else:
-    #         generated_ids = self.generate(
-    #             input_ids, generation_config=generation_config
-    #         )
+    #         generated_ids = self.generate(input_ids, generation_config=generation_config)
     #         # response = tokenizer.decode(outputs[0][len(input_ids[0]):], skip_special_tokens=True)
     #         generated_ids = [
-    #             output_ids[len(input_ids) :]
-    #             for input_ids, output_ids in zip(input_ids, generated_ids)
+    #             output_ids[len(input_ids):] for input_ids, output_ids in zip(input_ids, generated_ids)
     #         ]
-    #         response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[
-    #             0
-    #         ]
+    #         response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
     #         if use_pot:
     #             response = parse_pot_no_stream(response)
     #         return response
