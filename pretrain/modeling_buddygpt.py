@@ -946,42 +946,42 @@ class BuddyGPTForCausalLM(BuddyPreTrainedModel, GenerationMixin):
         generation_config.repetition_penalty = repetition_penalty
         return response
     
-    # def chat(
-    #     self, 
-    #     tokenizer, 
-    #     messages: List[dict], 
-    #     system: str = "你是由wdndev开发的个人助手。",
-    #     stream=False, 
-    #     use_pot=False,
-    #     generation_config: Optional[GenerationConfig]=None
-    # ):
+    def chat(
+        self, 
+        tokenizer, 
+        messages: List[dict], 
+        system: str = "you are a helpful assistant!",
+        stream=False, 
+        use_pot=False,
+        generation_config: Optional[GenerationConfig]=None
+    ):
         
-    #     generation_config = generation_config or self.generation_config
-    #     input_ids = make_context(
-    #         model=self, tokenizer=tokenizer, messages=messages,
-    #         system=system, max_new_tokens=generation_config.max_new_tokens
-    #     )
+        generation_config = generation_config or self.generation_config
+        input_ids = make_context(
+            model=self, tokenizer=tokenizer, messages=messages,
+            system=system, max_new_tokens=generation_config.max_new_tokens
+        )
 
-    #     # for inputs in input_ids:
-    #     #     print("decode: ", tokenizer.decode(inputs))
+        # for inputs in input_ids:
+        #     print("decode: ", tokenizer.decode(inputs))
         
-    #     if stream:
-    #         streamer = TextIterStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, use_pot=use_pot)
-    #         Thread(target=self.generate, kwargs=dict(
-    #             inputs=input_ids, streamer=streamer,
-    #             generation_config=generation_config,
-    #         )).start()
-    #         return streamer
-    #     else:
-    #         generated_ids = self.generate(input_ids, generation_config=generation_config)
-    #         # response = tokenizer.decode(outputs[0][len(input_ids[0]):], skip_special_tokens=True)
-    #         generated_ids = [
-    #             output_ids[len(input_ids):] for input_ids, output_ids in zip(input_ids, generated_ids)
-    #         ]
-    #         response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    #         if use_pot:
-    #             response = parse_pot_no_stream(response)
-    #         return response
+        if stream:
+            streamer = TextIterStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, use_pot=use_pot)
+            Thread(target=self.generate, kwargs=dict(
+                inputs=input_ids, streamer=streamer,
+                generation_config=generation_config,
+            )).start()
+            return streamer
+        else:
+            generated_ids = self.generate(input_ids, generation_config=generation_config)
+            # response = tokenizer.decode(outputs[0][len(input_ids[0]):], skip_special_tokens=True)
+            generated_ids = [
+                output_ids[len(input_ids):] for input_ids, output_ids in zip(input_ids, generated_ids)
+            ]
+            response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            if use_pot:
+                response = parse_pot_no_stream(response)
+            return response
 
 
 from transformers import AutoConfig, AutoModelForCausalLM
