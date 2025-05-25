@@ -1,21 +1,26 @@
 from transformers import AutoTokenizer
 from buddygpt import GPTConfig
 from buddygpt import BuddyGPT
+import buddygpt
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-output_dir = f'outputs/buddygpt-qwen3'
-block_size = 1024
-# uer/gpt2-chinese-cluecorpussmall
-# Qwen/Qwen3-0.6B
-# gpt2
-tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen3-0.6B' ,trust_remote_code=True)
-# tokenizer.pad_token = tokenizer.eos_token
-config = GPTConfig(
-        n_block=1024,
+def load_model_tokenizer(tokenizer_name, seq_len,device):
+    def print_parameters(model):
+        num_param = sum(
+            [param.numel() for param in model.parameters() if param.requires_grad]
+        )
+        print(f"total param {num_param/1024/1024}m")
+
+    # uer/gpt2-chinese-cluecorpussmall
+    # Qwen/Qwen3-0.6B
+    # gpt2
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+    # tokenizer.pad_token = tokenizer.eos_token
+    config = GPTConfig(
+        n_block=seq_len,
         n_layer=16,
         n_head=16,
         n_kv_head=8,
@@ -24,18 +29,17 @@ config = GPTConfig(
         pad_token_id=151643,
         eos_token_id=151645,
         tie_word_embeddings=True,
-    ) 
-model = GPTConfig(config)
-print(tokenizer.pad_token, tokenizer.pad_token_id)
-print(tokenizer.eos_token, tokenizer.eos_token_id)
-print(model)
+    )
+    model = BuddyGPT(config)
+    print(tokenizer.pad_token, tokenizer.pad_token_id)
+    print(tokenizer.eos_token, tokenizer.eos_token_id)
+    print(model)
+    print_parameters(model)
+    model.to(device)
+    return tokenizer, model
 
 
-def print_parameters(model):
-    num_param = sum([param.numel() for param in model.parameters() if param.requires_grad])
-    print(f'total param {num_param/1024/1024}m')
-
-def sample(model, query, max_length=50):
+def sample(tokenizer, model, query, max_length=50):
     input_ids = tokenizer.encode(query, return_tensors="pt").to(model.device)
     output = model.generate(
         input_ids=input_ids,
@@ -44,78 +48,76 @@ def sample(model, query, max_length=50):
     gen_text = tokenizer.decode(output[0], skip_special_tokens=True)
     return gen_text
 
-model.to(device)
-print_parameters(model)
-sample(model, '中国首都是哪?')
+
+
 # print(sum([p.numel() for p in model.parameters()]) / 1024 / 1024)
 
 
 ## load dataset
+def load_dataset(tokenizer, num_proc, seq_len):
+    from datasets import load_dataset, concatenate_datasets
+    # 50m model need 20*50m = 1B token
+    # 100m model need 20*100m = 2B token
+    # 200m model need 20*200m = 4B token
+    # 500m model need 20*500m = 10B token
+    # Total tokens: 1872137976
+    # 1.8B token
+    ds = load_dataset("pleisto/wikipedia-cn-20230720-filtered", split="train")
+    # zhihu instruction
+    zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
+    # 10B token
+    web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
+    # firefly ds
+    # 13B token
+    ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
+    # novel ds
+    novel_ds = load_dataset("wdndev/webnovel-chinese", split="train")
 
-from datasets import load_dataset, concatenate_datasets
-# 50m model need 20*50m = 1B token
-# 100m model need 20*100m = 2B token
-# 200m model need 20*200m = 4B token
-# 500m model need 20*500m = 10B token
+    # 拼接并切块
+    def group_texts_with_padding(examples):
+        # block_size = block_size
+        concatenated = sum(examples["input_ids"], [])
+        # result = {"input_ids": []}
+        total_length = len(concatenated)
+        result = {
+            "input_ids": [concatenated[i:i+seq_len] for i in range(0, total_length, seq_len)]
+        }
+        return result
 
-# Total tokens: 1872137976
-# 1.8B token
-ds = load_dataset("pleisto/wikipedia-cn-20230720-filtered", split="train")
-# zhihu instruction
-zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
-# 10B token
-web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
-# firefly ds
-# 13B token
-ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
-# novel ds
-novel_ds = load_dataset("wdndev/webnovel-chinese", split="train")
+    def encode(examples, field: str = 'text'):
+        result = tokenizer(examples[field])
+        return result
 
-# 拼接并切块
-def group_texts_with_padding(examples):
-    # block_size = block_size
-    concatenated = sum(examples["input_ids"], [])
-    # result = {"input_ids": []}
-    total_length = len(concatenated)
-    result = {
-        "input_ids": [concatenated[i:i+block_size] for i in range(0, total_length, block_size)]
-    }
-    return result
+    def encode_instruction(examples):
+        input_ids = []
+        attention_mask = []
+        for i in range(len(examples['INSTRUCTION'])):
+            instruction = examples['INSTRUCTION'][i]
+            response = examples['RESPONSE'][i]
+            build_instruction = f"### Instruction:\n{instruction}\n### Response:\n{response}"
+            tokenized_instruction = tokenizer(build_instruction)
+            input_ids.append(tokenized_instruction['input_ids'])
+            attention_mask.append(tokenized_instruction['attention_mask'])
+        result = {}
+        result['input_ids'] = input_ids
+        result['attention_mask'] = attention_mask
+        return result
 
-def encode(examples, field: str = 'text'):
-    result = tokenizer(examples[field])
-    return result
+    ds = ds.map(lambda x: encode(x, 'completion'), batched=True, num_proc=num_proc, remove_columns=ds.column_names)
+    ds = ds.map(group_texts_with_padding, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
+    zhihu_ds = zhihu_ds.map(encode_instruction, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
+    zhihu_ds = zhihu_ds.map(group_texts_with_padding, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
+    ff_ds = ff_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
+    ff_ds = ff_ds.map(group_texts_with_padding, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
+    novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
+    novel_ds = novel_ds.map(group_texts_with_padding, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
+    # web_ds = web_ds.map(encode, batched=True, num_proc=30, remove_columns=web_ds.column_names)
+    # web_ds = web_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=web_ds.column_names)
+    ds = concatenate_datasets([ds, ff_ds, novel_ds, zhihu_ds])
+    print(ds)
+    return ds
 
-def encode_instruction(examples):
-    input_ids = []
-    attention_mask = []
-    for i in range(len(examples['INSTRUCTION'])):
-        instruction = examples['INSTRUCTION'][i]
-        response = examples['RESPONSE'][i]
-        build_instruction = f"### Instruction:\n{instruction}\n### Response:\n{response}"
-        tokenized_instruction = tokenizer(build_instruction)
-        input_ids.append(tokenized_instruction['input_ids'])
-        attention_mask.append(tokenized_instruction['attention_mask'])
-    result = {}
-    result['input_ids'] = input_ids
-    result['attention_mask'] = attention_mask
-    return result
-
-ds = ds.map(lambda x: encode(x, 'completion'), batched=True, num_proc=30, remove_columns=ds.column_names)
-ds = ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=ds.column_names)
-zhihu_ds = zhihu_ds.map(encode_instruction, batched=True, num_proc=30, remove_columns=zhihu_ds.column_names)
-zhihu_ds = zhihu_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=zhihu_ds.column_names)
-ff_ds = ff_ds.map(encode, batched=True, num_proc=30, remove_columns=ff_ds.column_names)
-ff_ds = ff_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=ff_ds.column_names)
-novel_ds = novel_ds.map(encode, batched=True, num_proc=30, remove_columns=novel_ds.column_names)
-novel_ds = novel_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=novel_ds.column_names)
-# web_ds = web_ds.map(encode, batched=True, num_proc=30, remove_columns=web_ds.column_names)
-# web_ds = web_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=web_ds.column_names)
-ds = concatenate_datasets([ds, ff_ds, novel_ds, zhihu_ds])
-print(ds)
-
-
-def main(**kwargs):
+def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradient_accumulation_steps, flash_attn):
     from transformers import TrainingArguments, Trainer, TrainerCallback, DataCollatorForLanguageModeling, DataCollatorForSeq2Seq
     from datetime import datetime
 
@@ -124,7 +126,8 @@ def main(**kwargs):
     # torch.set_float32_matmul_precision("high")
 
     # print(sample(model, '中国首都是哪?'))
-    # buddygpt.FLASH = 1
+    if flash_attn:
+        buddygpt.FLASH = 1
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     class SampleTextCallback(TrainerCallback):
         def on_log(self, args, state, control, logs=None, **kwargs):
@@ -166,7 +169,7 @@ def main(**kwargs):
         adam_beta2 = 0.99,
         weight_decay = 0.1,
         warmup_ratio = 0.2,
-        per_device_train_batch_size=5,
+        per_device_train_batch_size=per_device_train_batch_size,
         per_device_eval_batch_size=8,
         num_train_epochs=1,
         logging_steps=50,
@@ -178,7 +181,7 @@ def main(**kwargs):
         # remove_unused_columns=False,
         max_grad_norm=1.0,
         # gradient_checkpointing=True,
-        gradient_accumulation_steps=128,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         # eval_strategy="steps",  # or eval_strategy="steps" in newer versions
         # eval_steps=500,              # Correct parameter name
         save_safetensors=True,
@@ -195,6 +198,40 @@ def main(**kwargs):
 
     trainer.train()
     trainer.save_model(output_dir)
+
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output_dir", type=str, default='outputs/buddygpt-qwen3')
+    parser.add_argument("--block_size", type=int, default=1024)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=1)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--num_train_epochs", type=int, default=1)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--warmup_steps", type=int, default=100)
+    parser.add_argument("--logging_steps", type=int, default=100)
+    parser.add_argument("--save_steps", type=int, default=1000)
+    parser.add_argument("--flash_attn", type=bool, default=True)
+    parser.add_argument("--ds_num_proc", type=int, default=30)
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    tokenizer, model = load_model_tokenizer(tokenizer_name='Qwen/Qwen3-0.6B', seq_len=args.block_size, device=device)
+    sample(tokenizer, model, '中国首都是哪?')
+    ds = load_dataset(tokenizer, num_proc=args.ds_num_proc, seq_len=args.block_size)
+    train(
+        ds=ds,
+        tokenizer=tokenizer,
+        model=model,
+        output_dir=args.output_dir,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        flash_attn=args.flash_attn,
+    )
 
 
 if __name__ == "__main__":

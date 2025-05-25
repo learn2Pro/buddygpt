@@ -43,86 +43,9 @@ class GPTConfig(PretrainedConfig):
 device = "cuda" if torch.cuda.is_available() else "cpu"
 FLASH = 0
 
-# # rope
-# def precompute_freqs_cis(dim, end, theta=10000.0):
-#     freqs = theta ** -(torch.arange(0, dim, 2)[:dim//2].float() / dim)
-#     t = torch.arange(end)
-#     freqs = torch.outer(t, freqs) # m * \theta
-#     # freqs = t * freqs
-#     freqs = torch.polar(torch.ones_like(freqs), freqs) # cos(m * \theta) + jsin(m * \theta)
-#     return freqs
-
-# # 2. 为广播 reshape freqs
-# def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-#     if freqs_cis.shape[0] > x.shape[1]:
-#         freqs_cis = freqs_cis[:x.shape[1]]
-#     assert freqs_cis.shape == (x.shape[1], x.shape[-1])
-#     shape = [1 if i != 1 and i != x.ndim - 1 else x.shape[i] for i in range(x.ndim)]
-#     return freqs_cis.view(*shape).to(x.device)
-
-# def apply_rotary_emb(q, k, freqs):
-#     xq = torch.view_as_complex(q.view(*q.shape[:-1], -1, 2)) # batch, seq_len, n_head, dim//2
-#     xk = torch.view_as_complex(k.view(*k.shape[:-1], -1, 2)) # batch, seq_len, n_head, dim//2
-
-#     freqs_cis = reshape_for_broadcast(freqs, xq) # freqs_cis.shape = (1,seq_len,1,dim)
-
-#     xq_out = torch.view_as_real(xq * freqs_cis).flatten(3) # batch, seq_len, n_head, dim
-#     xk_out = torch.view_as_real(xk * freqs_cis).flatten(3) # batch, seq_len, n_head, dim
-
-#     return xq_out.type_as(q), xk_out.type_as(k)
-
-# class RotaryEmbedding(nn.Module):
-#     def __precompute_freqs_cis(self, dim, max_seq_len, theta):
-#         assert dim%2 == 0
-#         freqs = theta ** -(torch.arange(0, dim ,2).float() / dim)
-#         t = torch.arange(max_seq_len)
-#         freqs = torch.outer(t, freqs) # (seq_len, dim/2)
-#         freqs = torch.polar(torch.ones_like(freqs), freqs) # cos(m*\theta) + jsin(m*\theat)
-#         return freqs
-
-#     def __init__(self, dim, max_seq_len=2048, theta=10000.0):
-#         super().__init__()
-#         self.dim = dim
-#         self.freqs = self.__precompute_freqs_cis(dim, max_seq_len, theta)
-
-#     def apply_rotary_emb(self, q, k=None):
-#         seq_len, dim = q.size(1), q.size(-1) # batch, n_head, seq_len, n_embed
-#         freqs_cis = self.freqs[None, :seq_len, None, :dim//2].contiguous().to(q.device)
-#         q = q.float()
-#         xq = torch.view_as_complex(q.view(*q.shape[:-1], -1, 2))
-#         xq_out = torch.view_as_real(xq * freqs_cis).flatten(3)
-#         if k is not None:
-#             k = k.float()
-#             xk = torch.view_as_complex(k.view(*k.shape[:-1], -1, 2))
-#             xk_out = torch.view_as_real(xk * freqs_cis).flatten(3)
-#             return xq_out.to(torch.bfloat16), xk_out.to(torch.bfloat16)
-#         else:
-#             return xq_out.to(torch.bfloat16)
-
-
-# class RotaryEmbedding(nn.Module):
-#     def __init__(self, dim, theta=10000.0):
-#         super().__init__()
-#         self.dim = dim
-#         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2) / dim))
-#         self.register_buffer("inv_freq", inv_freq, persistent=False)
-
-#     def apply_rotary_emb(self, x):
-#         seq_len = x.shape[1]
-#         t = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)
-#         freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim//2)
-
-#         cos = freqs.cos()[None, :, None, :]  # (1, seq_len, 1, dim//2)
-#         sin = freqs.sin()[None, :, None, :]  # (1, seq_len, 1, dim//2)
-
-#         x1, x2 = x[..., ::2], x[..., 1::2]
-#         x_rotated_even = x1 * cos - x2 * sin
-#         x_rotated_odd = x1 * sin + x2 * cos
-#         x_out = torch.stack([x_rotated_even, x_rotated_odd], dim=-1)
-#         return x_out.flatten(-2)
-
 import torch.nn as nn
 import torch
+
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
@@ -153,15 +76,14 @@ class RotaryEmbedding(nn.Module):
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(self.inv_freq)
 
         # 计算每个位置与每个维度的频率，形成频谱矩阵
-        # freqs = torch.outer(t, self.inv_freq)
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim//2)
+        freqs = torch.outer(t, self.inv_freq)
         
         # 不同于论文中的实现，这里采用了不同的排列方式以获得相同的计算结果
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
         self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
 
-    def get_cos_sin(self, x, seq_len=None):
+    def forward(self, x, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len > self.max_seq_len_cached:
             self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
@@ -171,47 +93,44 @@ class RotaryEmbedding(nn.Module):
             self.sin_cached[:seq_len].to(dtype=x.dtype),
         )
 
-    def rotate_half(self, x):
-        """ 旋转输入一半的 hidden dim
-        """
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
+def rotate_half(x):
+    """ 旋转输入一半的 hidden dim
+    """
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
 
 
-    # Copied from transformers.models.mistral.modeling_mistral.apply_rotary_pos_emb
-    def apply_rotary_emb(self, q, k, position_ids=None, unsqueeze_dim=1):
-        """ 在 qk 应用旋转位置编码
-    
-        Args:
-            q (`torch.Tensor`): q
-            k (`torch.Tensor`): k
-            cos (`torch.Tensor`): 旋转位置嵌入的余弦部分
-            sin (`torch.Tensor`): 旋转位置嵌入的正弦部分
-            position_ids (`torch.Tensor`): 与q和k对应位置的标记索引。例如，在处理KV缓存时，可以使用偏移过的位置ID。
-            unsqueeze_dim (`int`, *optional*, defaults to 1): 'unsqueeze_dim' 参数指定了沿哪个维度对 cos[position_ids] 
-                和 sin[position_ids] 进行扩展，以便它们能够适当地广播到 q 和 k 的维度上。
-                例如，注意 cos[position_ids] 和 sin[position_ids] 具有形状 [batch_size, seq_len, head_dim]。
-                那么，如果 q 和 k 的形状分别为 [batch_size, heads, seq_len, head_dim]，
-                则设置 unsqueeze_dim=1 可使 cos[position_ids] 和 sin[position_ids] 可以广播到 q 和 k 的形状上。
-                同样地，如果 q 和 k 的形状为 [batch_size, seq_len, heads, head_dim]，则应将 unsqueeze_dim 设置为 2
-        Returns:
-            包含使用旋转位置嵌入变换后的q和k张量的 `tuple(torch.Tensor)`。
-        """
-        # print("ori cos: ", cos.shape)
-        cos, sin = self.get_cos_sin(q, seq_len=q.shape[-2])
-        print(cos.shape, sin.shape)
-        cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-        sin = sin[position_ids].unsqueeze(unsqueeze_dim)
-        print(cos.shape, sin.shape)
-    
-        # print("q: ", q.shape)
-        # print("cos: ", cos.shape)
-        # print("sin: ", sin.shape)
-        # print("rotate_half: ", rotate_half(q).shape)
-        q_embed = (q * cos) + (self.rotate_half(q) * sin)
-        k_embed = (k * cos) + (self.rotate_half(k) * sin)
-        return q_embed, k_embed
+# Copied from transformers.models.mistral.modeling_mistral.apply_rotary_pos_emb
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    """ 在 qk 应用旋转位置编码
+
+    Args:
+        q (`torch.Tensor`): q
+        k (`torch.Tensor`): k
+        cos (`torch.Tensor`): 旋转位置嵌入的余弦部分
+        sin (`torch.Tensor`): 旋转位置嵌入的正弦部分
+        position_ids (`torch.Tensor`): 与q和k对应位置的标记索引。例如，在处理KV缓存时，可以使用偏移过的位置ID。
+        unsqueeze_dim (`int`, *optional*, defaults to 1): 'unsqueeze_dim' 参数指定了沿哪个维度对 cos[position_ids] 
+            和 sin[position_ids] 进行扩展，以便它们能够适当地广播到 q 和 k 的维度上。
+            例如，注意 cos[position_ids] 和 sin[position_ids] 具有形状 [batch_size, seq_len, head_dim]。
+            那么，如果 q 和 k 的形状分别为 [batch_size, heads, seq_len, head_dim]，
+            则设置 unsqueeze_dim=1 可使 cos[position_ids] 和 sin[position_ids] 可以广播到 q 和 k 的形状上。
+            同样地，如果 q 和 k 的形状为 [batch_size, seq_len, heads, head_dim]，则应将 unsqueeze_dim 设置为 2
+    Returns:
+        包含使用旋转位置嵌入变换后的q和k张量的 `tuple(torch.Tensor)`。
+    """
+    # print("ori cos: ", cos.shape)
+    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+
+    # print("q: ", q.shape)
+    # print("cos: ", cos.shape)
+    # print("sin: ", sin.shape)
+    # print("rotate_half: ", rotate_half(q).shape)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
     
 class SwiGLU(nn.Module):
     def __init__(self):
@@ -249,25 +168,20 @@ class GQA(nn.Module):
         k = self.k_proj(x).view(B, T, self.n_kv_head, -1)  # B, T, n_kv_head, n_embed
         v = self.v_proj(x).view(B, T, self.n_kv_head, -1)  # B, T, n_kv_head, n_embed
 
-        xq, xk = self.rope.apply_rotary_emb(q, k)
-
         xq = xq.transpose(1, 2)  # B, n_head, T, n_embed
         xk = xk.transpose(1, 2)  # B, n_kv_head, T, n_embed
         xv = v.transpose(1, 2)  # B, n_kv_head, T, n_embed
 
+        cos, sin = self.rope(xq, T)
+        xq, xk = apply_rotary_pos_emb(xq, xk, cos, sin)
+
         if self.repeat_factor > 1:
-            xk = xk.repeat_interleave(
-                self.repeat_factor, dim=1
-            )  # B, n_head, T, n_embed
-            xv = xv.repeat_interleave(
-                self.repeat_factor, dim=1
-            )  # B, n_head, T, n_embed
+            xk = xk.repeat_interleave(self.repeat_factor, dim=1)  # B, n_head, T, n_embed
+            xv = xv.repeat_interleave(self.repeat_factor, dim=1)  # B, n_head, T, n_embed
 
         if FLASH:
             # print('this way')
-            o_attn = F.scaled_dot_product_attention(
-                xq.contiguous(), xk.contiguous(), xv.contiguous(), is_causal=True
-            )
+            o_attn = F.scaled_dot_product_attention(xq.contiguous(), xk.contiguous(), xv.contiguous(), is_causal=True)
         else:
             # print('this way2')
             qk = torch.matmul(xq, xk.transpose(-2, -1))
@@ -298,16 +212,11 @@ class SelfCausalAttention(nn.Module):
         B, T, _ = x.size()
         attn = self.c_attn(x)
         q, k, v = attn.split(self.n_embed, dim=-1)  # B,n_block,n_embed
-        q = q.view(B, T, self.n_head, -1).transpose(
-            1, 2
-        )  # B, n_head, n_block, n_embed//n_head
-        k = k.view(B, T, self.n_head, -1).transpose(
-            1, 2
-        )  # B, n_head, n_block, n_embed//n_head
-        v = v.view(B, T, self.n_head, -1).transpose(
-            1, 2
-        )  # B, n_head, n_block, n_embed//n_head
-        q, k = self.rope.apply_rotary_emb(q, k)
+        q = q.view(B, T, self.n_head, -1).transpose(1, 2)  # B, n_head, n_block, n_embed//n_head
+        k = k.view(B, T, self.n_head, -1).transpose(1, 2)  # B, n_head, n_block, n_embed//n_head
+        v = v.view(B, T, self.n_head, -1).transpose(1, 2)  # B, n_head, n_block, n_embed//n_head
+        cos, sin = self.rope(q, T)
+        q, k = apply_rotary_pos_emb(q, k, cos, sin)
 
         if FLASH:
             o_attn = F.scaled_dot_product_attention(
