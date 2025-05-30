@@ -1,56 +1,36 @@
 from transformers import AutoTokenizer
-from configuration_buddygpt import BuddyGPTConfig
-from modeling_buddygpt import BuddyGPTForCausalLM
+from buddygpt import GPTConfig
+from buddygpt import BuddyGPT
+import buddygpt
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
-<<<<<<< HEAD
-def print_parameters(model):
-    num_param = sum(
-        [param.numel() for param in model.parameters() if param.requires_grad]
-    )
-    print(f"total param {num_param/1024/1024}m")
 
-
-def load_model_tokenizer(tokenizer_name, seq_len,device):
-=======
-
-def load_model_tokenizer(tokenizer_name, seq_len, device, n_embed=1024, n_inter_dim=2048, n_layer=24, n_head=16, n_kv_head=8):
+def load_model_tokenizer(tokenizer_name, seq_len, device, n_embed=1024, n_layer=24, n_head=16, n_kv_head=8):
     def print_parameters(model):
         num_param = sum(
             [param.numel() for param in model.parameters() if param.requires_grad]
         )
         print(f"total param {num_param/1024/1024}m")
->>>>>>> e5d9e42eaafec38a9eb84fcf96aae89f8c3f3f54
 
     # uer/gpt2-chinese-cluecorpussmall
     # Qwen/Qwen3-0.6B
     # gpt2
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
     # tokenizer.pad_token = tokenizer.eos_token
-    config = BuddyGPTConfig(
-        vocab_size=len(tokenizer),
-<<<<<<< HEAD
-        hidden_size=1536,
-        intermediate_size=2048,
-        num_hidden_layers=24,
-        num_attention_heads=16,
-        num_key_value_heads=8,
-=======
-        hidden_size=n_embed,
-        intermediate_size=n_inter_dim,
-        num_hidden_layers=n_layer,
-        num_attention_heads=n_head,
-        num_key_value_heads=n_kv_head,
->>>>>>> e5d9e42eaafec38a9eb84fcf96aae89f8c3f3f54
-        num_seq_len=seq_len,
+    config = GPTConfig(
+        n_block=seq_len,
+        n_layer=n_layer,
+        n_head=n_head,
+        n_kv_head=n_kv_head,
+        n_embed=n_embed,
+        n_vocab=len(tokenizer),
         pad_token_id=tokenizer.pad_token_id,
-        bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         tie_word_embeddings=True,
     )
-    model = BuddyGPTForCausalLM(config)
+    model = BuddyGPT(config)
     print(tokenizer.pad_token, tokenizer.pad_token_id)
     print(tokenizer.eos_token, tokenizer.eos_token_id)
     print(model)
@@ -68,6 +48,9 @@ def sample(tokenizer, model, query, max_length=50):
     gen_text = tokenizer.decode(output[0], skip_special_tokens=True)
     return gen_text
 
+
+
+# print(sum([p.numel() for p in model.parameters()]) / 1024 / 1024)
 
 
 ## load dataset
@@ -134,11 +117,7 @@ def load_dataset(tokenizer, num_proc, seq_len):
     print(ds)
     return ds
 
-<<<<<<< HEAD
 def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradient_accumulation_steps, flash_attn):
-=======
-def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradient_accumulation_steps, flash_attn=True):
->>>>>>> e5d9e42eaafec38a9eb84fcf96aae89f8c3f3f54
     from transformers import TrainingArguments, Trainer, TrainerCallback, DataCollatorForLanguageModeling, DataCollatorForSeq2Seq
     from datetime import datetime
 
@@ -147,11 +126,8 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
     # torch.set_float32_matmul_precision("high")
 
     # print(sample(model, '中国首都是哪?'))
-<<<<<<< HEAD
-    # if flash_attn:
-    #     buddygpt.FLASH = 1
-=======
->>>>>>> e5d9e42eaafec38a9eb84fcf96aae89f8c3f3f54
+    if flash_attn:
+        buddygpt.FLASH = 1
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     class SampleTextCallback(TrainerCallback):
         def on_log(self, args, state, control, logs=None, **kwargs):
@@ -188,7 +164,7 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
     args = TrainingArguments(
         run_name=f'buddygpt-{now}',
         output_dir=output_dir,
-        learning_rate=2e-4,
+        learning_rate=2e-5,
         adam_beta1 = 0.9,
         adam_beta2 = 0.99,
         weight_decay = 0.1,
@@ -226,15 +202,9 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
 def parse_args():
     import argparse
     parser = argparse.ArgumentParser()
-<<<<<<< HEAD
-    parser.add_argument("--output_dir", type=str, default='outputs/buddygpt-0.4b')
-    parser.add_argument("--block_size", type=int, default=1024)
-    parser.add_argument("--batch_size", type=int, default=4)
-=======
     parser.add_argument("--output_dir", type=str, default='outputs/buddygpt-qwen3')
     parser.add_argument("--block_size", type=int, default=1024)
     parser.add_argument("--per_device_train_batch_size", type=int, default=4)
->>>>>>> e5d9e42eaafec38a9eb84fcf96aae89f8c3f3f54
     parser.add_argument("--gradient_accumulation_steps", type=int, default=128)
     parser.add_argument("--num_train_epochs", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
@@ -258,11 +228,7 @@ def main():
         tokenizer=tokenizer,
         model=model,
         output_dir=args.output_dir,
-<<<<<<< HEAD
-        per_device_train_batch_size=args.batch_size,
-=======
         per_device_train_batch_size=args.per_device_train_batch_size,
->>>>>>> e5d9e42eaafec38a9eb84fcf96aae89f8c3f3f54
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         flash_attn=args.flash_attn,
     )

@@ -6,7 +6,6 @@ torch
 peft
 wandb
 scikit-learn
-ipywidgets
 deepspeed
 numpy
 loguru

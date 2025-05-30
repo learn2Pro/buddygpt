@@ -63,42 +63,6 @@ def report_memory(name):
 import torch
 import torch.nn as nn
 
-# class RotaryEmbedding(nn.Module):
-#     def __init__(self, dim, n_seq, theta=10000.0):
-#         super().__init__()
-#         self.dim = dim
-#         self.n_seq = n_seq
-#         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2) / dim))
-#         self.register_buffer("inv_freq", inv_freq, persistent=False)
-#         self.__cache_cos_sin()
-
-#     def __cache_cos_sin(self):
-#         seq_len = self.n_seq
-#         t = torch.arange(seq_len, dtype=self.inv_freq.dtype) # (seq_len,)
-#         freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim//2)
-#         emb = torch.cat([freqs, freqs], dim=-1)
-
-#         cos = emb.cos()[None, :, None, :]  # (1, seq_len, 1, dim//2)
-#         sin = emb.sin()[None, :, None, :]  # (1, seq_len, 1, dim//2)
-#         self.register_buffer('cos_emb', cos, persistent=False)
-#         self.register_buffer('sin_emb', sin, persistent=False)
-        
-        
-#     def rotate_half(self, x):
-#         """Rotates half the hidden dims of the input."""
-#         x1 = x[..., : x.shape[-1] // 2]
-#         x2 = x[..., x.shape[-1] // 2 :]
-#         return torch.cat((-x2, x1), dim=-1)
-
-#     def apply_rotary_emb(self, q, k):
-#         seq_len = q.shape[1]
-#         cos, sin = self.cos_emb[:,:seq_len,:,:].to(q.device), self.sin_emb[:,:seq_len,:,:].to(q.device)
-#         print(cos.shape, sin.shape)
-#         print(q.shape, k.shape)
-#         q_out = (q * cos) + (self.rotate_half(q) * sin)
-#         k_out = (k * cos) + (self.rotate_half(k) * sin)
-#         return q_out, k_out
-
 class TinyllmRotaryEmbedding(nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         """ 旋转位置编码
