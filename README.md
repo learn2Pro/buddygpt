@@ -13,9 +13,9 @@
 
 |model|cmmlu|gpqa|ifeval|aime24|math-500|livecodebench|
 |-|-|-|-|-|-|-|
-|buddygpt-0.4b-base-zh|**25.26**|0.1|0.1|0.1|0.1|0.1|
+|buddygpt-0.2b-base-zh|*25.91*|0.1|0.1|0.1|0.1|0.1|
 |deepseek-v3|**88.8**|59.1|**86.1**|39.2|**90.2**|37.6|
-|qwen3-0.6b|26.77|-|-|-|32.44|-|
+|qwen3-0.6b|34.22|-|-|-|32.44|-|
 
 ## implementation
 
