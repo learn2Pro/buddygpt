@@ -115,7 +115,8 @@ all_proxy= evalscope eval \
 - push_to_hub:
 ```
 huggingface-cli login
-huggingface-cli repo create buddygpt-0.4b-base-zh --type model
+huggingface-cli repo create buddygpt-0.2b-base-zh --type model
+huggingface-cli upload learn2pro/buddygpt-0.2b-base-zh outputs/buddygpt-qwen3
 ```
 
 

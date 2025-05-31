@@ -1,1 +1,9 @@
 *.pyc
+**/.ipynb_checkpoints
+__pycache__/
+**/outputs
+**/wandb
+# Python bytecode files
+*.pyo
+# Python cache files
+# Jupyter Notebook checkpoints

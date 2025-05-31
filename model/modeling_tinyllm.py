@@ -21,11 +21,11 @@ from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_m
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
-from transformers.generation.utils import GenerationConfig
+from transformers.generation.utils import GenerationConfig, GenerationMixin
 from transformers.generation.logits_process import LogitsProcessorList
 
-from configuration_tinyllm import TinyllmConfig
-# from generation_utils import TextIterStreamer, make_context, OutputRepetitionPenaltyLogitsProcessor, parse_pot_no_stream
+from model.configuration_tinyllm import TinyllmConfig
+from model.generation_utils import TextIterStreamer, make_context, OutputRepetitionPenaltyLogitsProcessor, parse_pot_no_stream
 
 logger = logging.get_logger(__name__)
 
@@ -675,7 +675,7 @@ class TinyllmModel(TinyllmPreTrainedModel):
             attentions=all_self_attns,
         )
         
-class TinyllmForCausalLM(TinyllmPreTrainedModel):
+class TinyllmForCausalLM(TinyllmPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):

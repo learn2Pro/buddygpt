@@ -3,6 +3,8 @@
 # conda create -n buddygpt python=3.10
 # conda activate buddygpt
 
+export PYTHONPATH=$(pwd):$PYTHONPATH
+
 python pretrain/pretrain.py \
     --output_dir outputs/buddygpt-qwen3 \
     --block_size 1024 \

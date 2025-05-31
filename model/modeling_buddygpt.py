@@ -30,10 +30,10 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.generation.utils import GenerationConfig, GenerationMixin
 from transformers.generation.logits_process import LogitsProcessorList
 
-from configuration_buddygpt import BuddyGPTConfig
+from model.configuration_buddygpt import BuddyGPTConfig
 from loguru import logger
 
-from generation_utils import TextIterStreamer, make_context, OutputRepetitionPenaltyLogitsProcessor, parse_pot_no_stream
+from model.generation_utils import TextIterStreamer, make_context, OutputRepetitionPenaltyLogitsProcessor, parse_pot_no_stream
 
 
 def report_memory(name):
