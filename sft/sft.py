@@ -19,6 +19,7 @@ def load_tokenizer_model(model_id, seq_len, device):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(model_id).to(device)
     print(len(tokenizer))
+    print(model)
     print_parameters(model)
     return tokenizer, model
 
@@ -60,7 +61,7 @@ def load_dataset(tokenizer, num_proc:int, seq_len:int):
             # user_content = f'instruction:{example["instruction"][i]}'+("" if example["input"][i] else f'\ninput:{example["input"][i]}')
             messages.append({"role":"system", "content": system_prompt})
             messages.append({"role":"user", "content": conversation[0]["value"]})
-            messages.append({"role":"assistant", "content": f'{conversation[1]["value"]}{tokenizer.eos_token}'})
+            messages.append({"role":"assistant", "content": f'{conversation[1]["value"]}'})
             text = tokenizer.apply_chat_template(messages, tokenize=False)
             output_texts.append(text)
         result = {}
@@ -75,7 +76,7 @@ def load_dataset(tokenizer, num_proc:int, seq_len:int):
             messages.append({"role":"system", "content": system_prompt})
             for item in conversation:
                 messages.append({"role":"user", "content": item["human"]})
-                messages.append({"role":"assistant", "content": f'{item["assistant"]}{tokenizer.eos_token}'})
+                messages.append({"role":"assistant", "content": f'{item["assistant"]}'})
             text = tokenizer.apply_chat_template(messages, tokenize=False)
             output_texts.append(text)
         result = {}
@@ -91,21 +92,56 @@ def load_dataset(tokenizer, num_proc:int, seq_len:int):
             output = example["output"][i]
             messages.append({"role":"system", "content": system_prompt})
             messages.append({"role":"user", "content": f'{instruction}\n{input_prompt}'})
-            messages.append({"role":"assistant", "content": f'{output}{tokenizer.eos_token}'})
+            messages.append({"role":"assistant", "content": f'{output}'})
             text = tokenizer.apply_chat_template(messages, tokenize=False)
             output_texts.append(text)
         result = {}
         result['text'] = output_texts
         return result
+
+    def mask_instruction(example, split_word = '<|im_start|>assistant'):
+        input_ids = []
+        labels = []
+        attention_mask = []
+        for i in range(len(example["text"])):
+            inst_str, resp_str = example["text"][i].split(split_word, maxsplit=1)
+            # if i == 0:
+            #     print(inst_str, '\n<split>\n', resp_str)
+            instruction = tokenizer.encode(inst_str + split_word, add_special_tokens=True, truncation=True, max_length=seq_len)
+            response = tokenizer.encode(resp_str, add_special_tokens=False, truncation=True, max_length=seq_len)
+            input_ids = instruction + response
+            labels = [tokenizer.pad_token_id] * len(instruction) + response
+            
+            pad_len = seq_len - len(input_ids)
+            input_ids += [tokenizer.pad_token_id] * pad_len
+            labels += [tokenizer.pad_token_id] * pad_len
+            labels = [(l if l != tokenizer.pad_token_id else -100) for l in labels]
+    
+            input_ids = torch.LongTensor(input_ids)
+            labels = torch.LongTensor(labels)
+            attention_mask = input_ids.ne(tokenizer.pad_token_id)
+
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+            "attention_mask": attention_mask,
+        }
+        
         
     stem_ds = stem_ds.map(format_chat_template, batched=True, num_proc=30, remove_columns=stem_ds.column_names)
+    # stem_ds = stem_ds.map(mask_instruction, batched=True, num_proc=30, remove_columns=stem_ds.column_names)
+    
     sharegpt_ds = sharegpt_ds.map(format_chat_template2, batched=True, num_proc=30, remove_columns=sharegpt_ds.column_names)
+    # sharegpt_ds = sharegpt_ds.map(mask_instruction, batched=True, num_proc=30, remove_columns=sharegpt_ds.column_names)
+    
     tiger_rs_ds = tiger_rs_ds.map(format_chat_template3, batched=True, num_proc=30, remove_columns=tiger_rs_ds.column_names)
+    # tiger_rs_ds = tiger_rs_ds.map(mask_instruction, batched=True, num_proc=30, remove_columns=tiger_rs_ds.column_names)
+    
     ds = concatenate_datasets([tiger_rs_ds, stem_ds, sharegpt_ds])
     print(ds)
     return ds
 
-def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradient_accumulation_steps):
+def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradient_accumulation_steps, seq_len, num_proc):
     from transformers import TrainerCallback
     from trl import SFTConfig, SFTTrainer, DataCollatorForCompletionOnlyLM
     
@@ -120,15 +156,14 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
                 gen_text = do_sample(tokenizer, model, prompt)
                 print(f"\n[Sample generated at step {state.global_step}]:\n{gen_text}\n")
     
-    # response_template = "<|assistant|>"
-    # tokenizer.max_seq_length = 2048
-    # collator = DataCollatorForCompletionOnlyLM(response_template="<|im_start|>assistant", tokenizer=tokenizer)
     # 定义 DataCollator，仅对 assistant 区域计算 loss
     collator = DataCollatorForCompletionOnlyLM(
         tokenizer=tokenizer,
-        instruction_template="<|im_start|>assistant",  # 开始 loss 的位置
+        instruction_template="<|im_start|>user",  # 开始 loss 的位置
         response_template="<|im_start|>assistant",  # 如果你想从 assistant 开始一直算 loss，可以省略
+        mlm=False,
     )
+
     
     args = SFTConfig(
         output_dir=output_dir,
@@ -146,16 +181,18 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
         save_total_limit=10,
         bf16=True,
         max_grad_norm=1.0,
+        dataset_text_field='text',
+        dataset_num_proc=num_proc,
+        max_seq_length=seq_len,
     )
     
     trainer = SFTTrainer(
         model,
         train_dataset=ds,
         args=args,
-        # formatting_func=formatting_prompts_func,
+        # formatting_func=lambda x: formatting_prompts_func(tokenizer, x),
         data_collator=collator,
         callbacks=[SampleTextCallback],
-        # dataset_format="chatml",  # 指定数据格式
     )
     
     trainer.train()
@@ -166,7 +203,7 @@ def parse_args():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_id", type=str, default='learn2pro/buddygpt-0.2b-base-zh')
-    parser.add_argument("--output_dir", type=str, default='outputs/buddygpt-0.2b-sft-zh')
+    parser.add_argument("--output_dir", type=str, default='outputs/buddygpt-0.2b-chat-zh')
     parser.add_argument("--block_size", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=128)
@@ -194,6 +231,8 @@ def main():
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        seq_len=args.block_size,
+        num_proc=args.ds_num_proc,
     )
 
 

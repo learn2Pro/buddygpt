@@ -12,7 +12,7 @@ def print_parameters(model):
     print(f"total param {num_param/1024/1024}m")
 
 
-def load_tokenizer_model(tokenizer_name, seq_len,device):
+def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, device):
 
     # uer/gpt2-chinese-cluecorpussmall
     # Qwen/Qwen3-0.6B
@@ -21,11 +21,11 @@ def load_tokenizer_model(tokenizer_name, seq_len,device):
     # tokenizer.pad_token = tokenizer.eos_token
     config = BuddyGPTConfig(
         vocab_size=len(tokenizer),
-        hidden_size=1536,
-        intermediate_size=2048,
-        num_hidden_layers=24,
-        num_attention_heads=16,
-        num_key_value_heads=8,
+        hidden_size=n_embed,
+        intermediate_size=n_embed * 2,
+        num_hidden_layers=n_layer,
+        num_attention_heads=n_head,
+        num_key_value_heads=n_head // 2,
         num_seq_len=seq_len,
         pad_token_id=tokenizer.pad_token_id,
         bos_token_id=tokenizer.bos_token_id,
@@ -203,6 +203,9 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default='outputs/buddygpt-0.4b')
     parser.add_argument("--block_size", type=int, default=1024)
+    parser.add_argument("--n_layer", type=int, default=24)
+    parser.add_argument("--n_embed", type=int, default=1536)
+    parser.add_argument("--n_head", type=int, default=16)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=128)
     parser.add_argument("--num_train_epochs", type=int, default=1)
@@ -219,7 +222,14 @@ def parse_args():
 def main():
     args = parse_args()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    tokenizer, model = load_tokenizer_model(tokenizer_name='Qwen/Qwen3-0.6B', seq_len=args.block_size, device=device)
+    tokenizer, model = load_tokenizer_model(
+        tokenizer_name='Qwen/Qwen3-0.6B', 
+        seq_len=args.block_size, 
+        n_layer=args.n_layer, 
+        n_embed=args.n_embed, 
+        n_head=args.n_head, 
+        device=device
+    )
     sample(tokenizer, model, '中国首都是哪?')
     ds = load_dataset(tokenizer, num_proc=args.ds_num_proc, seq_len=args.block_size)
     train(
