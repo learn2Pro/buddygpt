@@ -421,11 +421,7 @@ class DecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.self_attn = (
-            SdpaAttention(config, layer_idx)
-            if config._attn_implementation == "sdpa"
-            else SelfAttention(config, layer_idx)
-        )
+        self.self_attn = (SdpaAttention(config, layer_idx) if config._attn_implementation == "sdpa" else SelfAttention(config, layer_idx))
         self.mlp = GateMLP(config)
         self.input_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -523,7 +519,7 @@ class BuddyGPTModel(BuddyPreTrainedModel):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         self._attn_implementation = config._attn_implementation
         self.norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)

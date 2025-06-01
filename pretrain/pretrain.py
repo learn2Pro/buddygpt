@@ -12,7 +12,7 @@ def print_parameters(model):
     print(f"total param {num_param/1024/1024}m")
 
 
-def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, device):
+def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, attn_impl='sdpa', device='cuda'):
 
     # uer/gpt2-chinese-cluecorpussmall
     # Qwen/Qwen3-0.6B
@@ -31,6 +31,7 @@ def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, devi
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         tie_word_embeddings=True,
+        _attn_implementation=attn_impl,
     )
     model = BuddyGPTForCausalLM(config)
     print(tokenizer.pad_token, tokenizer.pad_token_id)
@@ -206,6 +207,7 @@ def parse_args():
     parser.add_argument("--n_layer", type=int, default=24)
     parser.add_argument("--n_embed", type=int, default=1536)
     parser.add_argument("--n_head", type=int, default=16)
+    parser.add_argument("--attn_impl", type=str, default='sdpa')
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=128)
     parser.add_argument("--num_train_epochs", type=int, default=1)
@@ -228,7 +230,8 @@ def main():
         n_layer=args.n_layer, 
         n_embed=args.n_embed, 
         n_head=args.n_head, 
-        device=device
+        attn_impl=args.attn_impl,
+        device=device,
     )
     sample(tokenizer, model, '中国首都是哪?')
     ds = load_dataset(tokenizer, num_proc=args.ds_num_proc, seq_len=args.block_size)
