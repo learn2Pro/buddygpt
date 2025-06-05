@@ -63,7 +63,7 @@ def report_memory(name):
 import torch
 import torch.nn as nn
 
-class TinyllmRotaryEmbedding(nn.Module):
+class RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         """ 旋转位置编码
             - dim (int): 旋转嵌入的维度大小。
@@ -212,7 +212,7 @@ class SelfAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
-        self.rotary_emb = TinyllmRotaryEmbedding(
+        self.rotary_emb = RotaryEmbedding(
             self.head_dim,
             max_position_embeddings=self.num_seq_len,
             base=self.rope_theta,
@@ -408,12 +408,6 @@ class SdpaAttention(SelfAttention):
         attn_output = self.o_proj(attn_output)  # (bsz, q_len, hidden_dim)
 
         return attn_output, None, past_key_value
-
-
-TINYLLM_ATTENTION_CLASSES = {
-    "eager": SelfAttention,
-    "sdpa": SdpaAttention,
-}
 
 
 class DecoderLayer(nn.Module):
@@ -952,7 +946,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 AutoConfig.register("buddygpt", BuddyGPTConfig)
 AutoModelForCausalLM.register(BuddyGPTConfig, BuddyGPTForCausalLM)
-# AutoModelForCausalLM = BuddyGPTForCausalLM
+AutoModelForCausalLM = BuddyGPTForCausalLM
 
 
 def print_model_parameters(model):
