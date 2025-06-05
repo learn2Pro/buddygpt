@@ -11,12 +11,26 @@
 
 ## metrics
 
-|model|cmmlu|gpqa|ifeval|aime24|math-500|livecodebench|
-|-|-|-|-|-|-|-|
-|buddygpt-0.2b-base-zh|*25.91*|0.1|0.1|0.1|0.1|0.1|
-|buddygpt-0.2b-chat-zh|*25.62*|0.1|0.1|0.1|0.1|0.1|
-|deepseek-v3|**88.8**|59.1|**86.1**|39.2|**90.2**|37.6|
-|qwen3-0.6b|34.22|-|-|-|32.44|-|
+### train
+- buddygpt-0.2b-base-zh
+![buddygpt-0.2b-base-zh](buddygpt-0.2b-base-zh.png)
+- buddygpt-0.4b-base-zh
+![buddygpt-0.4b-base-zh](buddygpt-0.2b-base-zh.png)
+
+|model|n_embed|n_layer|loss|
+|-|-|-|-|
+|buddygpt-0.2b-base-zh|1024|24|4.6754|
+|buddygpt-0.4b-base--zh|1024|24|0.1|
+
+### eval
+|model|cmmlu@0|cmmlu@5|gpqa|ifeval|aime24|math-500|livecodebench|
+|-|-|-|-|-|-|-|-|
+|[buddygpt-0.2b-base-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-base-zh)|*25.47*|*25.47*|0.1|0.1|0.1|0.1|0.1|
+|[buddygpt-0.2b-chat-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-chat-zh)|*25.08*|*25.10*|0.1|0.1|0.1|0.1|0.1|
+|[buddygpt-0.2b-dpo-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-chat-zh)|*25.08*|*25.85*|0.1|0.1|0.1|0.1|0.1|
+|deepseek-v3|**88.8**|**88.8**|59.1|**86.1**|39.2|**90.2**|37.6|
+|qwen3-0.6b|35.29|32.88|-|-|-|32.44|-|
+|qwen2.5-0.5b|41.44|39.23|-|-|-|32.44|-|
 
 ## implementation
 
@@ -41,7 +55,6 @@ graph LR
 | zhihu             | [zhihu](https://huggingface.co/datasets/wangrui6/Zhihu-KOL)  | 知乎KOL中截取的数据                             |
 | 网络小说      | [webnovel](https://huggingface.co/datasets/wdndev/webnovel-chinese) | 个人爬虫数据清洗的数据                             |
 | TigerBot 部分数据 | [tigerBot](https://huggingface.co/datasets/TigerResearch/pretrain_zh) | TigerBot 模型训练的部分中文数据，原始数据太多了 |
-|                   |                                                              |                                                 |
 
 ## SFT
 
@@ -52,7 +65,17 @@ SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要�
 | Belle       | [Belle](https://huggingface.co/datasets/BelleGroup/train_2M_CN) | 包含约200万条由BELLE项目生成的中文指令数据 |
 | Firefly     | [Firefly](https://huggingface.co/datasets/YeungNLP/firefly-train-1.1M) | 流萤开源模型SFT数据集                      |
 | TigerBot    | [tigerBot](https://huggingface.co/datasets/TigerResearch/sft_zh) | TigerBot 模型SFT数据集                     |
-|             |                                                              |                                            |
+|YeungNLP/moss-003-sft-data|[YeungNLP/moss-003-sft-data](https://huggingface.co/datasets/YeungNLP/moss-003-sft-data)|YeungNLP|
+
+## RLHF
+
+来源于开源DPO数据集，详细数据集如下：
+
+| DPO微调数据 | 链接                                                         | 描述                                       |
+| ----------- | ------------------------------------------------------------ | ------------------------------------------ |
+| FuseAI/FuseChat-3.0-DPO-Data       | [FuseAI/FuseChat-3.0-DPO-Data](https://huggingface.co/datasets/FuseAI/FuseChat-3.0-DPO-Data/viewer/default/train?row=0&views%5B%5D=train) | 包含约200万条由BELLE项目生成的中文指令数据 |
+| Hello-SimpleAI/HC3-Chinese     | [Hello-SimpleAI/HC3-Chinese](https://huggingface.co/datasets/Hello-SimpleAI/HC3-Chinese) | 流萤开源模型SFT数据集                      |
+|YeungNLP/ultrafeedback_binarized|[YeungNLP/ultrafeedback_binarized](https://huggingface.co/datasets/YeungNLP/ultrafeedback_binarized)|YeungNLP DPO|
 
 ## code structure
 
@@ -116,8 +139,15 @@ all_proxy= evalscope eval \
 - push_to_hub:
 ```
 huggingface-cli login
-huggingface-cli repo create buddygpt-0.2b-base-zh --type model
-huggingface-cli upload learn2pro/buddygpt-0.2b-base-zh outputs/buddygpt-qwen3
+huggingface-cli repo create buddygpt-0.2b-chat-zh --type model
+huggingface-cli upload learn2pro/buddygpt-0.2b-chat-zh .
+```
+
+- push to modelscope:
+```
+modelscope login
+all_proxy= modelscope modelcard -act create -mid learn2pro/buddygpt-0.2b-chat-zh -ch learn2pro/buddygpt-0.2b-chat-zh
+all_proxy= modelscope upload learn2pro/buddygpt-0.2b-chat-zh .
 ```
 
 
