@@ -92,11 +92,11 @@ def load_dataset(tokenizer, num_proc, seq_len):
         total_length = len(concatenated_examples[list(examples.keys())[0]])
         # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
         # customize this part to your needs.
-        if total_length >= max_seq_length:
-            total_length = (total_length // max_seq_length) * max_seq_length
+        if total_length >= seq_len:
+            total_length = (total_length // seq_len) * seq_len
         # Split by chunks of max_len.
         result = {
-            k: [t[i: i + max_seq_length] for i in range(0, total_length, max_seq_length)]
+            k: [t[i: i + seq_len] for i in range(0, total_length, seq_len)]
             for k, t in concatenated_examples.items()
         }
         return result
@@ -121,15 +121,15 @@ def load_dataset(tokenizer, num_proc, seq_len):
         return result
 
     ds = ds.map(lambda x: encode(x, 'completion'), batched=True, num_proc=num_proc, remove_columns=ds.column_names)
-    ds = ds.map(group_texts_with_padding, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
+    ds = ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
     zhihu_ds = zhihu_ds.map(encode_instruction, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
-    zhihu_ds = zhihu_ds.map(group_texts_with_padding, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
+    zhihu_ds = zhihu_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
     ff_ds = ff_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
-    ff_ds = ff_ds.map(group_texts_with_padding, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
+    ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
     novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-    novel_ds = novel_ds.map(group_texts_with_padding, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-    web_ds = web_ds.map(encode, batched=True, num_proc=30, remove_columns=web_ds.column_names)
-    web_ds = web_ds.map(group_texts_with_padding, batched=True, num_proc=30, remove_columns=web_ds.column_names)
+    novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
+    web_ds = web_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
+    web_ds = web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
     ds = concatenate_datasets([ds, ff_ds, novel_ds, web_ds, zhihu_ds])
     print(ds)
     return ds

@@ -3,7 +3,11 @@ wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && ba
 conda create -n buddygpt python=3.10
 conda activate buddygpt
 
+git clone git@github.com:learn2Pro/buddygpt.git
+
 pip install -U -r requirements.txt
+
+# cd pretrain && accelerate launch --config_file ptrain.yaml --num_processes=2 pretrain.py --n_embed=1024 --n_layer=32
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
