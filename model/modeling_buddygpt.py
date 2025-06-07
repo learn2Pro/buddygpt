@@ -64,7 +64,7 @@ import torch
 import torch.nn as nn
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+    def __init__(self, dim, max_position_embeddings=2048, base=100000, device=None):
         """ 旋转位置编码
             - dim (int): 旋转嵌入的维度大小。
             - max_position_embeddings (int): 预计算的最大位置嵌入数，默认为2048。
@@ -80,11 +80,9 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
         # 为了支持`torch.jit.trace`功能，立即计算预存储的余弦和正弦缓存
-        self._set_cos_sin_cache(
-            seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
-        )
+        self._set_cos_sin_cache(seq_len=max_position_embeddings, device=self.inv_freq.device)
 
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
+    def _set_cos_sin_cache(self, seq_len, device):
         """ 预计算的余弦和正弦缓存
         """
         self.max_seq_len_cached = seq_len
@@ -92,14 +90,15 @@ class RotaryEmbedding(nn.Module):
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(self.inv_freq)
 
         # 计算每个位置与每个维度的频率，形成频谱矩阵
-        freqs = torch.outer(t, self.inv_freq)
+        # freqs = torch.outer(t, self.inv_freq)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         
         # 不同于论文中的实现，这里采用了不同的排列方式以获得相同的计算结果
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+        self.register_buffer("cos_cached", emb.cos(), persistent=False)
+        self.register_buffer("sin_cached", emb.sin(), persistent=False)
 
-    def forward(self, x, seq_len=None):
+    def forward(self, x, seq_len):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len > self.max_seq_len_cached:
             self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
@@ -109,16 +108,10 @@ class RotaryEmbedding(nn.Module):
             self.sin_cached[:seq_len].to(dtype=x.dtype),
         )
 
-def rotate_half(x):
-    """ 旋转输入一半的 hidden dim
-    """
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
 
 
 # Copied from transformers.models.mistral.modeling_mistral.apply_rotary_pos_emb
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """ 在 qk 应用旋转位置编码
 
     Args:
@@ -136,6 +129,13 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     Returns:
         包含使用旋转位置嵌入变换后的q和k张量的 `tuple(torch.Tensor)`。
     """
+    def rotate_half(x):
+        """ 旋转输入一半的 hidden dim
+        """
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
     # print("ori cos: ", cos.shape)
     cos = cos[position_ids].unsqueeze(unsqueeze_dim)
     sin = sin[position_ids].unsqueeze(unsqueeze_dim)
@@ -144,6 +144,10 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     # print("cos: ", cos.shape)
     # print("sin: ", sin.shape)
     # print("rotate_half: ", rotate_half(q).shape)
+    # e^(i*theta) = cos(theta) + i*sin(theta)
+    # 二维变量 x1+i*x2 旋转 theta 角度 (x1+i*x2)*(cos(theta)+i*sin(theta))
+    # 旋转后 x1' = x1*cos(theta) - x2*sin(theta)
+    # 旋转后 x2' = x1*sin(theta) + x2*cos(theta)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed

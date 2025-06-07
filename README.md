@@ -16,11 +16,16 @@
 ![buddygpt-0.2b-base-zh](buddygpt-0.2b-base-zh.png)
 - buddygpt-0.4b-base-zh
 ![buddygpt-0.4b-base-zh](buddygpt-0.2b-base-zh.png)
+![step1200](step1200.png)
+![step2800](step2800.png)
+![step3800](step3800.png)
+![step76](step7600.png)
+ 
 
 |model|n_embed|n_layer|loss|
 |-|-|-|-|
-|buddygpt-0.2b-base-zh|1024|24|4.6754|
-|buddygpt-0.4b-base--zh|1024|24|0.1|
+|buddygpt-0.2b-base-zh|512|24|4.6754|
+|buddygpt-0.4b-base-zh|1024|36|0.1|
 
 ### eval
 |model|cmmlu@0|cmmlu@5|gpqa|ifeval|aime24|math-500|livecodebench|
