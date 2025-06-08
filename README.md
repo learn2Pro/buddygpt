@@ -8,29 +8,6 @@
 |buddygpt-0.2b|✅|✅|16|8|512|24|1024|4.6754|
 |buddygpt-0.4b|✅|✅|16|8|**1024**|**32**|1024|4.6754|
 
-## metrics
-
-### train
-- buddygpt-0.2b-base-zh
-![buddygpt-0.2b-base-zh](static/buddygpt-0.2b-base-zh.png)
-- buddygpt-0.4b-base-zh
-![buddygpt-0.4b-base-zh](static/buddygpt-0.2b-base-zh.png)
-![step1200](static/step1200.png)
-![step2800](static/step2800.png)
-![step3800](static/step3800.png)
-![step7600](static/step7600.png)
-![step10000](static/step10000.png) 可以看到开始有北京了，这时候loss=3.8
- 
-
-### eval
-|model|cmmlu@0|cmmlu@5|gpqa|ifeval|aime24|math-500|livecodebench|
-|-|-|-|-|-|-|-|-|
-|[buddygpt-0.2b-base-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-base-zh)|*25.47*|*25.47*|0.1|0.1|0.1|0.1|0.1|
-|[buddygpt-0.2b-chat-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-chat-zh)|*25.08*|*25.10*|0.1|0.1|0.1|0.1|0.1|
-|[buddygpt-0.2b-dpo-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-chat-zh)|*25.08*|*25.85*|0.1|0.1|0.1|0.1|0.1|
-|deepseek-v3|**88.8**|**88.8**|59.1|**86.1**|39.2|**90.2**|37.6|
-|qwen3-0.6b|35.29|32.88|-|-|-|32.44|-|
-|qwen2.5-0.5b|41.44|39.23|-|-|-|32.44|-|
 
 ## implementation
 
@@ -45,7 +22,7 @@ graph LR
 ```
 
 ## pretrain
-
+#### dataset
 本次训练的预训练预料都来自[Hugging Face](https://huggingface.co/)，主要包含以下几个经典的中文数据集，大约有35B左右Token，详细数据集如下：
 
 | 中文预训练语料    | 链接                                                         | 描述                                            |
@@ -55,6 +32,29 @@ graph LR
 | 网络小说      | [webnovel](https://huggingface.co/datasets/wdndev/webnovel-chinese) | 网络小说(8.4B)                             |
 | fineweb-sample-10B | [fineweb-sample10TB](https://huggingface.co/datasets/HuggingFaceFW/fineweb) | sample-10BT: a subset randomly sampled from the whole dataset of around 10B gpt2 tokens (10B) |
 | Firefly pretrain | [firefly-pretrain](https://huggingface.co/datasets/YeungNLP/firefly-pretrain-dataset) | Firefly 模型训练的部分中文数据(4.7B) |
+
+#### summary
+
+- buddygpt-0.2b-base-zh
+![buddygpt-0.2b-base-zh](static/buddygpt-0.2b-base-zh.png)
+- buddygpt-0.4b-base-zh
+![buddygpt-0.4b-base-zh](static/buddygpt-0.2b-base-zh.png)
+![step1200](static/step1200.png)
+![step2800](static/step2800.png)
+![step3800](static/step3800.png)
+![step7600](static/step7600.png)
+![step10000](static/step10000.png) 可以看到开始有北京了，这时候loss=3.8
+ 
+#### metrics
+|model|cmmlu@0|cmmlu@5|gpqa|ifeval|aime24|math-500|livecodebench|
+|-|-|-|-|-|-|-|-|
+|[buddygpt-0.2b-base-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-base-zh)|*25.47*|*25.47*|0.1|0.1|0.1|0.1|0.1|
+|[buddygpt-0.2b-chat-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-chat-zh)|*25.08*|*25.10*|0.1|0.1|0.1|0.1|0.1|
+|[buddygpt-0.2b-dpo-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-chat-zh)|*25.08*|*25.85*|0.1|0.1|0.1|0.1|0.1|
+|deepseek-v3|**88.8**|**88.8**|59.1|**86.1**|39.2|**90.2**|37.6|
+|qwen3-0.6b|35.29|32.88|-|-|-|32.44|-|
+|qwen2.5-0.5b|41.44|39.23|-|-|-|32.44|-|
+
 
 ## SFT
 
