@@ -13,14 +13,14 @@
 
 ### train
 - buddygpt-0.2b-base-zh
-![buddygpt-0.2b-base-zh](buddygpt-0.2b-base-zh.png)
+![buddygpt-0.2b-base-zh](static/buddygpt-0.2b-base-zh.png)
 - buddygpt-0.4b-base-zh
-![buddygpt-0.4b-base-zh](buddygpt-0.2b-base-zh.png)
-![step1200](step1200.png)
-![step2800](step2800.png)
-![step3800](step3800.png)
-![step7600](step7600.png)
-![step10000](step10000.png) 可以看到开始有北京了，这时候loss=3.8
+![buddygpt-0.4b-base-zh](static/buddygpt-0.2b-base-zh.png)
+![step1200](static/step1200.png)
+![step2800](static/step2800.png)
+![step3800](static/step3800.png)
+![step7600](static/step7600.png)
+![step10000](static/step10000.png) 可以看到开始有北京了，这时候loss=3.8
  
 
 |model|n_embed|n_layer|loss|
@@ -56,11 +56,11 @@ graph LR
 
 | 中文预训练语料    | 链接                                                         | 描述                                            |
 | ----------------- | ------------------------------------------------------------ | ----------------------------------------------- |
-| Wiki中文百科      | [wikipedia](https://huggingface.co/datasets/pleisto/wikipedia-cn-20230720-filtered) | 中文Wikipedia的数据                             |
-| BaiduBaiKe        | [baidubaike](https://huggingface.co/datasets/xuqinyang/BaiduBaike-5.63M) | 中文BaiduBaiKe的数据                            |
-| zhihu             | [zhihu](https://huggingface.co/datasets/wangrui6/Zhihu-KOL)  | 知乎KOL中截取的数据                             |
-| 网络小说      | [webnovel](https://huggingface.co/datasets/wdndev/webnovel-chinese) | 个人爬虫数据清洗的数据                             |
-| TigerBot 部分数据 | [tigerBot](https://huggingface.co/datasets/TigerResearch/pretrain_zh) | TigerBot 模型训练的部分中文数据，原始数据太多了 |
+| Wiki中文百科      | [wikipedia](https://huggingface.co/datasets/pleisto/wikipedia-cn-20230720-filtered) | 中文Wikipedia的数据(1.8B)  |
+| zhihu             | [zhihu](https://huggingface.co/datasets/wangrui6/Zhihu-KOL)  | 知乎KOL中截取的数据(0.47B)          |
+| 网络小说      | [webnovel](https://huggingface.co/datasets/wdndev/webnovel-chinese) | 网络小说(8.4B)                             |
+| fineweb-sample-10B | [fineweb-sample10TB](https://huggingface.co/datasets/HuggingFaceFW/fineweb) | sample-10BT: a subset randomly sampled from the whole dataset of around 10B gpt2 tokens (10B) |
+| Firefly pretrain | [firefly-pretrain](https://huggingface.co/datasets/YeungNLP/firefly-pretrain-dataset) | Firefly 模型训练的部分中文数据(4.7B) |
 
 ## SFT
 
@@ -71,7 +71,7 @@ SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要�
 | Belle       | [Belle](https://huggingface.co/datasets/BelleGroup/train_2M_CN) | 包含约200万条由BELLE项目生成的中文指令数据 |
 | Firefly     | [Firefly](https://huggingface.co/datasets/YeungNLP/firefly-train-1.1M) | 流萤开源模型SFT数据集                      |
 | TigerBot    | [tigerBot](https://huggingface.co/datasets/TigerResearch/sft_zh) | TigerBot 模型SFT数据集                     |
-|YeungNLP/moss-003-sft-data|[YeungNLP/moss-003-sft-data](https://huggingface.co/datasets/YeungNLP/moss-003-sft-data)|YeungNLP|
+| YeungNLP/moss-003-sft-data |[YeungNLP/moss-003-sft-data](https://huggingface.co/datasets/YeungNLP/moss-003-sft-data)|YeungNLP|
 
 ## RLHF
 
