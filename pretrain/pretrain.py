@@ -140,7 +140,7 @@ def load_dataset(tokenizer, num_proc, seq_len):
 
     return ds
 
-def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradient_accumulation_steps, flash_attn):
+def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradient_accumulation_steps, flash_attn, sample_step):
     from transformers import TrainingArguments, Trainer, TrainerCallback, DataCollatorForLanguageModeling, DataCollatorForSeq2Seq
     from datetime import datetime
 
@@ -154,12 +154,12 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     class SampleTextCallback(TrainerCallback):
         def on_log(self, args, state, control, logs=None, **kwargs):
-            if state.global_step % 100 == 0:
+            if state.global_step % sample_step == 0:
                 prompt = "中国首都是哪?"
                 gen_text = sample(tokenizer, model, prompt, max_length=128)
                 print(f"\n[Sample generated at step {state.global_step}]:\n{gen_text}\n")
 
-            if state.global_step % 100 == 0:
+            if state.global_step % sample_step == 0:
                 prompt = "which is the capital of china?"
                 gen_text = sample(tokenizer, model, prompt, max_length=128)
                 print(f"\n[Sample generated at step {state.global_step}]:\n{gen_text}\n")
@@ -195,8 +195,8 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
         per_device_train_batch_size=per_device_train_batch_size,
         per_device_eval_batch_size=8,
         num_train_epochs=1,
-        logging_steps=50,
-        save_steps=100,
+        logging_steps=sample_step // 2,
+        save_steps=sample_step,
         save_total_limit=10,
         bf16=True,
         # fp16=True,
@@ -240,6 +240,7 @@ def parse_args():
     parser.add_argument("--logging_steps", type=int, default=100)
     parser.add_argument("--save_steps", type=int, default=1000)
     parser.add_argument("--flash_attn", type=bool, default=True)
+    parser.add_argument("--sample_step", type=int, default=100)
     parser.add_argument("--ds_num_proc", type=int, default=30)
     return parser.parse_args()
 
@@ -266,6 +267,7 @@ def main():
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         flash_attn=args.flash_attn,
+        sample_step=args.sample_step,
     )
 
 

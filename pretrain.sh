@@ -7,7 +7,7 @@ git clone git@github.com:learn2Pro/buddygpt.git
 
 pip install -U -r requirements.txt
 
-# cd pretrain && accelerate launch --config_file ptrain.yaml --num_processes=8 pretrain.py --batch_size=32 --gradient_accumulation_steps=64 --n_embed=1024 --n_layer=32 --ds_num_proc=300
+# cd pretrain && accelerate launch --config_file ptrain.yaml --num_processes=8 pretrain.py --batch_size=20 --gradient_accumulation_steps=64 --n_embed=1024 --n_layer=32 --ds_num_proc=300
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
