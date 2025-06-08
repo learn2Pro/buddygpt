@@ -5,6 +5,9 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
+from accelerate import Accelerator
+accelerator = Accelerator()
+
 def print_parameters(model):
     num_param = sum(
         [param.numel() for param in model.parameters() if param.requires_grad]
@@ -55,35 +58,11 @@ def sample(tokenizer, model, query, max_length=50):
 
 ## load dataset
 def load_dataset(tokenizer, num_proc, seq_len):
-    from datasets import load_dataset, concatenate_datasets
-    # 50m model need 20*50m = 1B token
-    # 100m model need 20*100m = 2B token
-    # 200m model need 20*200m = 4B token
-    # 500m model need 20*500m = 10B token
-    # Total tokens: 1872137976
-    # 1.8B token
-    ds = load_dataset("pleisto/wikipedia-cn-20230720-filtered", split="train")
-    # zhihu instruction 0.47b
-    zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
-    # 10B token
-    web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
-    # firefly ds
-    # 4.7B token
-    ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
-    # novel ds
-    # 8.4b
-    novel_ds = load_dataset("wdndev/webnovel-chinese", split="train")
+    from datasets import load_dataset, concatenate_datasets, load_from_disk
+    import os
 
-    # 拼接并切块
-    def group_texts_with_padding(examples):
-        # block_size = block_size
-        concatenated = sum(examples["input_ids"], [])
-        # result = {"input_ids": []}
-        total_length = len(concatenated)
-        result = {
-            "input_ids": [concatenated[i:i+seq_len] for i in range(0, total_length, seq_len)]
-        }
-        return result
+    data_cache_dir = 'data/pretrain_processed'
+
         
     def group_texts(examples):
         from itertools import chain
@@ -119,19 +98,46 @@ def load_dataset(tokenizer, num_proc, seq_len):
         result['input_ids'] = input_ids
         result['attention_mask'] = attention_mask
         return result
+    
+    if accelerator.is_main_process:
+        if not os.path.exists(data_cache_dir):
+            # 50m model need 20*50m = 1B token
+            # 100m model need 20*100m = 2B token
+            # 200m model need 20*200m = 4B token
+            # 500m model need 20*500m = 10B token
+            # Total tokens: 1872137976
+            # 1.8B token
+            ds = load_dataset("pleisto/wikipedia-cn-20230720-filtered", split="train")
+            # zhihu instruction 0.47b
+            zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
+            # 10B token
+            web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
+            # firefly ds
+            # 4.7B token
+            ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
+            # novel ds
+            # 8.4b
+            novel_ds = load_dataset("wdndev/webnovel-chinese", split="train")
+            ds = ds.map(lambda x: encode(x, 'completion'), batched=True, num_proc=num_proc, remove_columns=ds.column_names)
+            ds = ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
+            zhihu_ds = zhihu_ds.map(encode_instruction, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
+            zhihu_ds = zhihu_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
+            ff_ds = ff_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
+            ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
+            novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
+            novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
+            web_ds = web_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
+            web_ds = web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
+            ds = concatenate_datasets([ds, ff_ds, novel_ds, web_ds, zhihu_ds])
+            print(ds)
+            ds.save_to_disk(data_cache_dir)
+        else:
+            print("Using cached data")
+    
+    accelerator.wait_for_everyone()
+    ds = load_from_disk(data_cache_dir)
 
-    ds = ds.map(lambda x: encode(x, 'completion'), batched=True, num_proc=num_proc, remove_columns=ds.column_names)
-    ds = ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
-    zhihu_ds = zhihu_ds.map(encode_instruction, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
-    zhihu_ds = zhihu_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
-    ff_ds = ff_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
-    ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
-    novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-    novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-    web_ds = web_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
-    web_ds = web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
-    ds = concatenate_datasets([ds, ff_ds, novel_ds, web_ds, zhihu_ds])
-    print(ds)
+
     return ds
 
 def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradient_accumulation_steps, flash_attn):

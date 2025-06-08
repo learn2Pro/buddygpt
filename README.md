@@ -19,7 +19,8 @@
 ![step1200](step1200.png)
 ![step2800](step2800.png)
 ![step3800](step3800.png)
-![step76](step7600.png)
+![step7600](step7600.png)
+![step10000](step10000.png) 可以看到开始有北京了，这时候loss=3.8
  
 
 |model|n_embed|n_layer|loss|
