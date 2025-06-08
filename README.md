@@ -3,11 +3,10 @@
 > *train llm from scratch especially for the chinese language*
 > with RoPE, GQA, SWiGLU, RMSNorm, weight-tying, FLASH-ATTENTION
 
-|model|Tied Embedding|RoPE|Q-head|KV-head|n_embed|n_layer|seq_len|
-|-|-|-|-|-|-|-|-|
-|buddygpt-0.2b|✅|✅|16|8|1024|16|1024|
-|buddygpt-0.4b|❌|✅|16|8|1024|16|1024|
-|buddygpt-4b|❌|✅|32|16|2048|24|1024|
+|model|Tied Embedding|RoPE|Q-head|KV-head|n_embed|n_layer|seq_len|loss|
+|-|-|-|-|-|-|-|-|-|
+|buddygpt-0.2b|✅|✅|16|8|512|24|1024|4.6754|
+|buddygpt-0.4b|✅|✅|16|8|**1024**|**32**|1024|4.6754|
 
 ## metrics
 
@@ -22,11 +21,6 @@
 ![step7600](static/step7600.png)
 ![step10000](static/step10000.png) 可以看到开始有北京了，这时候loss=3.8
  
-
-|model|n_embed|n_layer|loss|
-|-|-|-|-|
-|buddygpt-0.2b-base-zh|512|24|4.6754|
-|buddygpt-0.4b-base-zh|1024|36|0.1|
 
 ### eval
 |model|cmmlu@0|cmmlu@5|gpqa|ifeval|aime24|math-500|livecodebench|
