@@ -132,8 +132,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     def rotate_half(x):
         """ 旋转输入一半的 hidden dim
         """
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
+        x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
 
     # print("ori cos: ", cos.shape)
@@ -942,11 +941,10 @@ class BuddyGPTForCausalLM(BuddyPreTrainedModel, GenerationMixin):
             return response
 
 
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoModel, AutoConfig, AutoModelForCausalLM
 
 AutoConfig.register("buddygpt", BuddyGPTConfig)
-AutoModelForCausalLM.register(BuddyGPTConfig, BuddyGPTForCausalLM)
-AutoModelForCausalLM = BuddyGPTForCausalLM
+AutoModel.register(BuddyGPTConfig, BuddyGPTModel)
 
 
 def print_model_parameters(model):

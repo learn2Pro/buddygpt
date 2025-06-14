@@ -6,7 +6,7 @@
 |model|Tied Embedding|RoPE|Q-head|KV-head|n_embed|n_layer|seq_len|loss|
 |-|-|-|-|-|-|-|-|-|
 |buddygpt-0.2b|✅|✅|16|8|512|24|1024|4.6754|
-|buddygpt-0.4b|✅|✅|16|8|**1024**|**32**|1024|4.6754|
+|buddygpt-0.4b|✅|✅|16|8|**1024**|**32**|1024|3.6754|
 
 
 ## implementation
@@ -31,6 +31,7 @@ graph LR
 | zhihu             | [zhihu](https://huggingface.co/datasets/wangrui6/Zhihu-KOL)  | 知乎KOL中截取的数据(0.47B)          |
 | 网络小说      | [webnovel](https://huggingface.co/datasets/wdndev/webnovel-chinese) | 网络小说(8.4B)                             |
 | fineweb-sample-10B | [fineweb-sample10TB](https://huggingface.co/datasets/HuggingFaceFW/fineweb) | sample-10BT: a subset randomly sampled from the whole dataset of around 10B gpt2 tokens (10B) |
+| Ultra-FineWeb | [Ultra-FineWeb](https://huggingface.co/datasets/openbmb/Ultra-FineWeb) | Ultra-FineWeb is a large-scale, high-quality, and efficiently-filtered dataset(120B) |
 | Firefly pretrain | [firefly-pretrain](https://huggingface.co/datasets/YeungNLP/firefly-pretrain-dataset) | Firefly 模型训练的部分中文数据(4.7B) |
 
 #### summary
@@ -62,10 +63,12 @@ SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要�
 
 | SFT微调数据 | 链接                                                         | 描述                                       |
 | ----------- | ------------------------------------------------------------ | ------------------------------------------ |
+| Mxode/Chinese-Instruct-Lite |[Mxode/Chinese-Instruct-Lite](https://huggingface.co/datasets/Mxode/Chinese-Instruct-Lite/viewer/general) | 一个全新的简化数据集 |
 | Belle       | [Belle](https://huggingface.co/datasets/BelleGroup/train_2M_CN) | 包含约200万条由BELLE项目生成的中文指令数据 |
 | Firefly     | [Firefly](https://huggingface.co/datasets/YeungNLP/firefly-train-1.1M) | 流萤开源模型SFT数据集                      |
 | TigerBot    | [tigerBot](https://huggingface.co/datasets/TigerResearch/sft_zh) | TigerBot 模型SFT数据集                     |
 | YeungNLP/moss-003-sft-data |[YeungNLP/moss-003-sft-data](https://huggingface.co/datasets/YeungNLP/moss-003-sft-data)|YeungNLP|
+
 
 ## RLHF
 
