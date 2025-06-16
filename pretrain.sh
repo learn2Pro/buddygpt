@@ -12,11 +12,11 @@ pip install -U -r requirements.txt
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 python pretrain/pretrain.py \
-    --output_dir outputs/buddygpt-0.4b-base \
+    --output_dir outputs/buddygpt-0.1b-base \
     --block_size 1024 \
-    --n_embed 1024 \
+    --n_embed 768 \
     --n_head 16 \
-    --n_layer 24 \
+    --n_layer 4 \
     --batch_size 20 \
     --attn_impl sdpa \
     --gradient_accumulation_steps 64

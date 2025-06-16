@@ -107,30 +107,35 @@ def load_dataset(tokenizer, num_proc, seq_len):
             # 500m model need 20*500m = 10B token
             # Total tokens: 1872137976
             # 1.8B token
-            ds = load_dataset("pleisto/wikipedia-cn-20230720-filtered", split="train")
+            # ds = load_dataset("pleisto/wikipedia-cn-20230720-filtered", split="train")
             # zhihu instruction 0.47b
-            zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
+            # zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
             # 10B token
             # web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
-            web_ds = load_dataset("openbmb/Ultra-FineWeb", split="train")
+            web_ds = load_dataset("openbmb/Ultra-FineWeb", split="zh").filter(lambda x: x['score'] >= 0.7)
+            # wikipedia ds
+            wiki_ds = load_dataset("wikimedia/wikipedia", "20231101.zh", split="train")
             # firefly ds
             # 4.7B token
-            ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
+            # ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
             # novel ds
             # 8.4b
-            novel_ds = load_dataset("wdndev/webnovel-chinese", split="train")
+            # novel_ds = load_dataset("wdndev/webnovel-chinese", split="train")
 
-            ds = ds.map(lambda x: encode(x, 'completion'), batched=True, num_proc=num_proc, remove_columns=ds.column_names)
-            ds = ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
-            zhihu_ds = zhihu_ds.map(encode_instruction, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
-            zhihu_ds = zhihu_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
-            ff_ds = ff_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
-            ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
-            novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-            novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
+            # ds = ds.map(lambda x: encode(x, 'completion'), batched=True, num_proc=num_proc, remove_columns=ds.column_names)
+            # ds = ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
+            # zhihu_ds = zhihu_ds.map(encode_instruction, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
+            # zhihu_ds = zhihu_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=zhihu_ds.column_names)
+            # ff_ds = ff_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
+            # ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
+            # novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
+            # novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
             web_ds = web_ds.map(lambda x: encode(x, 'content'), batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
             web_ds = web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
-            ds = concatenate_datasets([web_ds, ds, ff_ds, novel_ds, zhihu_ds])
+            wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, num_proc=num_proc, remove_columns=wiki_ds.column_names)
+            wiki_ds = wiki_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=wiki_ds.column_names)
+            # ds = concatenate_datasets([web_ds, ds, ff_ds, novel_ds, zhihu_ds])
+            ds = concatenate_datasets([web_ds, ds])
             print(ds)
             ds.save_to_disk(data_cache_dir)
         else:

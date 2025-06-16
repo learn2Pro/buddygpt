@@ -5,6 +5,7 @@
 
 |model|Tied Embedding|RoPE|Q-head|KV-head|n_embed|n_layer|seq_len|loss|
 |-|-|-|-|-|-|-|-|-|
+|buddygpt-0.1b|✅|✅|16|8|768|4|1024|4.2111|
 |buddygpt-0.2b|✅|✅|16|8|512|24|1024|4.6754|
 |buddygpt-0.4b|✅|✅|16|8|**1024**|**32**|1024|3.6754|
 
@@ -36,6 +37,9 @@ graph LR
 
 #### summary
 
+- buddygpt-0.1b-base-zh
+![step3500](static/0.1b-output-step3500.png)
+![buddygpt-0.1b-base-zh](static/0.1b-step3500.png)
 - buddygpt-0.2b-base-zh
 ![buddygpt-0.2b-base-zh](static/buddygpt-0.2b-base-zh.png)
 - buddygpt-0.4b-base-zh
