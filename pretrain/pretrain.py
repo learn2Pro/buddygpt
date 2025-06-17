@@ -135,7 +135,7 @@ def load_dataset(tokenizer, num_proc, seq_len):
             wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, num_proc=num_proc, remove_columns=wiki_ds.column_names)
             wiki_ds = wiki_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=wiki_ds.column_names)
             # ds = concatenate_datasets([web_ds, ds, ff_ds, novel_ds, zhihu_ds])
-            ds = concatenate_datasets([web_ds, ds])
+            ds = concatenate_datasets([web_ds, wiki_ds])
             print(ds)
             ds.save_to_disk(data_cache_dir)
         else:

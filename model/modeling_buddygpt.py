@@ -101,7 +101,7 @@ class RotaryEmbedding(nn.Module):
     def forward(self, x, seq_len):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len > self.max_seq_len_cached:
-            self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+            self._set_cos_sin_cache(seq_len=seq_len, device=x.device)
 
         return (
             self.cos_cached[:seq_len].to(dtype=x.dtype),
@@ -940,13 +940,6 @@ class BuddyGPTForCausalLM(BuddyPreTrainedModel, GenerationMixin):
                 response = parse_pot_no_stream(response)
             return response
 
-
-from transformers import AutoModel, AutoConfig, AutoModelForCausalLM
-
-AutoConfig.register("buddygpt", BuddyGPTConfig)
-AutoModel.register(BuddyGPTConfig, BuddyGPTModel)
-
-
 def print_model_parameters(model):
     """打印模型各个层参数"""
     param_sum = 0
@@ -955,3 +948,19 @@ def print_model_parameters(model):
             param_sum += param.numel()
             print(f"Layer: {name}, Parameters: {param.numel()}")
     print(f"Total of parameters: {param_sum}")
+    
+# from transformers import AutoModel, AutoConfig, AutoModelForCausalLM
+
+# AutoConfig.register("buddygpt", BuddyGPTConfig)
+# AutoModel.register(BuddyGPTConfig, BuddyGPTModel)
+# # AutoModelForCausalLM.register(BuddyGPTConfig, BuddyGPTModel)
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING
+
+# 注册 config
+CONFIG_MAPPING.register("buddygpt", BuddyGPTConfig)
+# 注册模型
+MODEL_FOR_CAUSAL_LM_MAPPING.register(BuddyGPTConfig, BuddyGPTForCausalLM)
+
+
+

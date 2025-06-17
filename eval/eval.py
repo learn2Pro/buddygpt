@@ -1,5 +1,6 @@
 from evalscope.run import run_task
-import model.modeling_tinyllm
+import model.modeling_buddygpt
+
 
 import argparse
 parser = argparse.ArgumentParser()
