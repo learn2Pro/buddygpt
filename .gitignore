@@ -7,3 +7,4 @@ __pycache__/
 *.pyo
 # Python cache files
 # Jupyter Notebook checkpoints
+**/data

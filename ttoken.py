@@ -35,7 +35,7 @@ def main():
     args = parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     
-    ds = load_dataset(args.ds, split=args.split)
+    ds = load_dataset(args.ds, split=args.split).filter(lambda x: x['score'] >= 0.99)
     calc_token(ds, tokenizer, field=args.field, num_proc=args.num_proc)
     
 

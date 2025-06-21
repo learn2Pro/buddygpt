@@ -112,9 +112,12 @@ def load_dataset(tokenizer, num_proc, seq_len):
             # zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
             # 10B token
             # web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
-            web_ds = load_dataset("openbmb/Ultra-FineWeb", split="zh").filter(lambda x: x['score'] >= 0.7)
-            # wikipedia ds
-            wiki_ds = load_dataset("wikimedia/wikipedia", "20231101.zh", split="train")
+            # 120B * 0.1 = ~12B token
+            zh_web_ds = load_dataset("data/Ultra-FineWeb", split="zh").filter(lambda x: x['score'] >= 0.95)
+            # 1024B * 0.1 * 0.2 = ~ 20B token
+            en_web_ds = load_dataset("data/Ultra-FineWeb", split="en").filter(lambda x: x['score'] >= 0.99)
+            # wikipedia ds ~= 0.72b
+            wiki_ds = load_dataset("data/wikipedia", "20231101.zh", split="train")
             # firefly ds
             # 4.7B token
             # ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
@@ -130,19 +133,21 @@ def load_dataset(tokenizer, num_proc, seq_len):
             # ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
             # novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
             # novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-            web_ds = web_ds.map(lambda x: encode(x, 'content'), batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
-            web_ds = web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=web_ds.column_names)
+            zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, num_proc=num_proc, remove_columns=zh_web_ds.column_names)
+            zh_web_ds = zh_web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=zh_web_ds.column_names)
+            en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, num_proc=num_proc, remove_columns=en_web_ds.column_names)
+            en_web_ds = en_web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=en_web_ds.column_names)
             wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, num_proc=num_proc, remove_columns=wiki_ds.column_names)
             wiki_ds = wiki_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=wiki_ds.column_names)
             # ds = concatenate_datasets([web_ds, ds, ff_ds, novel_ds, zhihu_ds])
-            ds = concatenate_datasets([web_ds, wiki_ds])
+            ds = concatenate_datasets([wiki_ds, zh_web_ds, en_web_ds])
             print(ds)
-            ds.save_to_disk(data_cache_dir)
+            # ds.save_to_disk(data_cache_dir)
         else:
             print("Using cached data")
     
-    accelerator.wait_for_everyone()
-    ds = load_from_disk(data_cache_dir)
+    # accelerator.wait_for_everyone()
+    # ds = load_from_disk(data_cache_dir)
 
 
     return ds
@@ -207,7 +212,7 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
         save_total_limit=10,
         bf16=True,
         # fp16=True,
-        # max_steps=1,
+        # max_steps=30000,
         # remove_unused_columns=False,
         max_grad_norm=1.0,
         # gradient_checkpointing=True,
