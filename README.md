@@ -143,11 +143,16 @@ all_proxy= evalscope eval \
  --limit 10
 ```
 
+- serve by transformer
+```
+transformers chat learn2pro/buddygpt-0.1b-chat
+```
+
 - push_to_hub:
 ```
 huggingface-cli login
-huggingface-cli repo create buddygpt-0.2b-chat-zh --type model
-huggingface-cli upload learn2pro/buddygpt-0.2b-chat-zh .
+huggingface-cli repo create buddygpt-0.1b-chat --type model
+huggingface-cli upload learn2pro/buddygpt-0.1b-chat .
 ```
 
 - push to modelscope:

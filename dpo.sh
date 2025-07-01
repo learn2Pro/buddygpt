@@ -5,10 +5,9 @@
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
-python sft/sft.py \
-    --output_dir outputs/buddygpt-0.1b-chat-maxode \
-    --model_id outputs/buddygpt-0.1b-base \
-    --block_size 4196 \
+python rlhf/dpo.py \
+    --output_dir outputs/buddygpt-0.1b-dpo \
+    --model_id outputs/buddygpt-0.1b-chat \
+    --block_size 1024 \
     --batch_size 4 \
-    --gradient_accumulation_steps 128 \
-    --ds_batch_size 8192
+    --gradient_accumulation_steps 128

@@ -1,7 +1,7 @@
 """
-Tiny LLM 模型架构
+Buddy LLM 模型架构
 
-到处抄，整体还是Llama2的模型架构
+到处抄，整体还是Llama2/3的模型架构
 """
 
 import math

@@ -15,7 +15,7 @@ def print_parameters(model):
     print(f"total param {num_param/1024/1024}m")
 
 
-def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, attn_impl='sdpa', device='cuda'):
+def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, n_kv_head, attn_impl='sdpa', device='cuda'):
 
     # uer/gpt2-chinese-cluecorpussmall
     # Qwen/Qwen3-0.6B
@@ -28,7 +28,7 @@ def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, attn
         intermediate_size=n_embed * 2,
         num_hidden_layers=n_layer,
         num_attention_heads=n_head,
-        num_key_value_heads=n_head // 2,
+        num_key_value_heads=n_kv_head,
         num_seq_len=seq_len,
         pad_token_id=tokenizer.pad_token_id,
         bos_token_id=tokenizer.bos_token_id,
@@ -57,7 +57,7 @@ def sample(tokenizer, model, query, max_length=50):
 
 
 ## load dataset
-def load_dataset(tokenizer, num_proc, seq_len):
+def load_dataset(tokenizer, num_proc, batch_size, seq_len):
     from datasets import load_dataset, concatenate_datasets, load_from_disk
     import os
 
@@ -87,9 +87,9 @@ def load_dataset(tokenizer, num_proc, seq_len):
     def encode_instruction(examples):
         input_ids = []
         attention_mask = []
-        for i in range(len(examples['INSTRUCTION'])):
-            instruction = examples['INSTRUCTION'][i]
-            response = examples['RESPONSE'][i]
+        for i in range(len(examples['prompt'])):
+            instruction = examples['prompt'][i]
+            response = examples['response'][i]
             build_instruction = f"### Instruction:\n{instruction}\n### Response:\n{response}"
             tokenized_instruction = tokenizer(build_instruction)
             input_ids.append(tokenized_instruction['input_ids'])
@@ -112,12 +112,36 @@ def load_dataset(tokenizer, num_proc, seq_len):
             # zhihu_ds = load_dataset("wangrui6/Zhihu-KOL", split="train")
             # 10B token
             # web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
-            # 120B * 0.1 = ~12B token
-            zh_web_ds = load_dataset("data/Ultra-FineWeb", split="zh").filter(lambda x: x['score'] >= 0.95)
-            # 1024B * 0.1 * 0.2 = ~ 20B token
-            en_web_ds = load_dataset("data/Ultra-FineWeb", split="en").filter(lambda x: x['score'] >= 0.99)
-            # wikipedia ds ~= 0.72b
-            wiki_ds = load_dataset("data/wikipedia", "20231101.zh", split="train")
+            # ~32B token
+            # zh_web_ds = load_dataset("openbmb/Ultra-FineWeb", split="zh").filter(lambda x: x['score'] >= 0.95, num_proc=num_proc)
+            zh_web_ds = load_dataset(
+                "parquet",
+                data_files="data/Ultra-FineWeb/data/ultrafineweb_zh/ultrafineweb-zh-*.parquet",
+                split='train',
+                # num_proc=num_proc,
+            ).filter(lambda x: float(x['score']) >= 0.85, num_proc=num_proc)
+            
+            # ~ 4.176B token
+            # en_web_ds = load_dataset("openbmb/Ultra-FineWeb", split="en").filter(lambda x: x['score'] >= 0.99, num_proc=num_proc)
+            # ~60B
+            en_web_ds = load_dataset(
+                "parquet",
+                data_files="data/Ultra-FineWeb/data/ultrafineweb_en/ultrafineweb-en-part-0[0-3][0-9][0-9]-of-2048.parquet",
+                split='train[:]',
+                num_proc=num_proc,
+            ).filter(lambda x: float(x['score']) >= 0.85, num_proc=num_proc)
+            
+            # wikipedia ds ~= 0.77B
+            # wiki_ds = load_dataset("data/wikipedia", "20231101.zh", split="train")
+            wiki_ds = load_dataset("parquet", data_files="data/wikipedia/20231101.zh/*.parquet", split='train')
+
+            # 0.235B + 0.5B
+            instruct_ds = load_dataset(
+                "json",
+                data_files="data/Chinese-Instruct/**/*.jsonl",
+                split="train",
+                # num_proc=num_proc,
+            )
             # firefly ds
             # 4.7B token
             # ff_ds = load_dataset("YeungNLP/firefly-pretrain-dataset", split="train")
@@ -133,14 +157,17 @@ def load_dataset(tokenizer, num_proc, seq_len):
             # ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
             # novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
             # novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-            zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, num_proc=num_proc, remove_columns=zh_web_ds.column_names)
-            zh_web_ds = zh_web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=zh_web_ds.column_names)
-            en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, num_proc=num_proc, remove_columns=en_web_ds.column_names)
-            en_web_ds = en_web_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=en_web_ds.column_names)
-            wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, num_proc=num_proc, remove_columns=wiki_ds.column_names)
-            wiki_ds = wiki_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=wiki_ds.column_names)
-            # ds = concatenate_datasets([web_ds, ds, ff_ds, novel_ds, zhihu_ds])
-            ds = concatenate_datasets([wiki_ds, zh_web_ds, en_web_ds])
+            zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=zh_web_ds.column_names)
+            zh_web_ds = zh_web_ds.map(group_texts, batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=zh_web_ds.column_names)
+            en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=en_web_ds.column_names)
+            en_web_ds = en_web_ds.map(group_texts, batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=en_web_ds.column_names)
+            wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=[])
+            wiki_ds = wiki_ds.map(group_texts, batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=wiki_ds.column_names)
+
+            instruct_ds = instruct_ds.map(encode_instruction, batch_size=batch_size, num_proc=num_proc, remove_columns=instruct_ds.column_names)
+            instruct_ds = instruct_ds.map(group_texts, batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=instruct_ds.column_names)
+            
+            ds = concatenate_datasets([zh_web_ds, en_web_ds, wiki_ds, instruct_ds])
             print(ds)
             # ds.save_to_disk(data_cache_dir)
         else:
@@ -199,7 +226,7 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
     args = TrainingArguments(
         run_name=f'buddygpt-{now}',
         output_dir=output_dir,
-        learning_rate=2e-4,
+        learning_rate=2e-3,
         adam_beta1 = 0.9,
         adam_beta2 = 0.99,
         weight_decay = 0.1,
@@ -242,6 +269,7 @@ def parse_args():
     parser.add_argument("--n_layer", type=int, default=24)
     parser.add_argument("--n_embed", type=int, default=1536)
     parser.add_argument("--n_head", type=int, default=16)
+    parser.add_argument("--n_kv_head", type=int, default=8)
     parser.add_argument("--attn_impl", type=str, default='sdpa')
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=128)
@@ -254,6 +282,7 @@ def parse_args():
     parser.add_argument("--flash_attn", type=bool, default=True)
     parser.add_argument("--sample_step", type=int, default=100)
     parser.add_argument("--ds_num_proc", type=int, default=30)
+    parser.add_argument("--ds_batch_size", type=int, default=1024)
     return parser.parse_args()
 
 
@@ -266,11 +295,12 @@ def main():
         n_layer=args.n_layer, 
         n_embed=args.n_embed, 
         n_head=args.n_head, 
+        n_kv_head=args.n_kv_head,
         attn_impl=args.attn_impl,
         device=device,
     )
     sample(tokenizer, model, '中国首都是哪?')
-    ds = load_dataset(tokenizer, num_proc=args.ds_num_proc, seq_len=args.block_size)
+    ds = load_dataset(tokenizer, num_proc=args.ds_num_proc, batch_size=args.ds_batch_size, seq_len=args.block_size)
     train(
         ds=ds,
         tokenizer=tokenizer,

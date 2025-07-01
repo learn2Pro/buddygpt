@@ -24,7 +24,7 @@ def load_tokenizer_model(model_id, device):
 
 def do_sample(tokenizer, model, prompt, max_new_tokens=128):
     messages = [
-        {"role":"system", "content": system_prompt},
+        # {"role":"system", "content": system_prompt},
         {"role":"user", "content": prompt},
     ]
     prompt = tokenizer.apply_chat_template(    
@@ -41,7 +41,7 @@ def do_sample(tokenizer, model, prompt, max_new_tokens=128):
     return gen_text
 
 def load_dpo_dataset(tokenizer, num_proc:int, seq_len:int):
-    ds = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+    ds = load_dataset("Anthropic/hh-rlhf", split="train")
     
     print(ds)
     return ds
@@ -60,6 +60,8 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
         save_total_limit=10,
         bf16=True,
         max_grad_norm=1.0,
+        dataset_num_proc=num_proc,
+        max_length=seq_len,
     )
 
 
