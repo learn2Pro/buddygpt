@@ -3,11 +3,11 @@
 > *train llm from scratch especially for the chinese language*
 > with RoPE, GQA, SWiGLU, RMSNorm, weight-tying, FLASH-ATTENTION
 
-|model|Tied Embedding|RoPE|Q-head|KV-head|n_embed|n_layer|seq_len|loss|
-|-|-|-|-|-|-|-|-|-|
-|buddygpt-0.1b|✅|✅|16|8|768|4|1024|4.2111|
-|buddygpt-0.2b|✅|✅|16|8|512|24|1024|4.6754|
-|buddygpt-0.4b|✅|✅|16|8|**1024**|**32**|1024|3.6754|
+|model|Tied Embedding|RoPE|Q-head|KV-head|n_embed|n_layer|seq_len|batch_size(token)|loss|
+|-|-|-|-|-|-|-|-|-|-|
+|buddygpt-0.1b|✅|✅|16|8|768|8|1024|20*64k|3.5766|
+|buddygpt-0.3b|✅|✅|16|8|1024|24|1024|20*64k|-|
+|buddygpt-0.4b|✅|✅|16|8|**1024**|**32**|1024|**20*64k**|3.6754|
 
 
 ## implementation
@@ -28,20 +28,21 @@ graph LR
 
 | 中文预训练语料    | 链接                                                         | 描述                                            |
 | ----------------- | ------------------------------------------------------------ | ----------------------------------------------- |
-| Wiki中文百科      | [wikipedia](https://huggingface.co/datasets/pleisto/wikipedia-cn-20230720-filtered) | 中文Wikipedia的数据(1.8B)  |
-| zhihu             | [zhihu](https://huggingface.co/datasets/wangrui6/Zhihu-KOL)  | 知乎KOL中截取的数据(0.47B)          |
-| 网络小说      | [webnovel](https://huggingface.co/datasets/wdndev/webnovel-chinese) | 网络小说(8.4B)                             |
-| fineweb-sample-10B | [fineweb-sample10TB](https://huggingface.co/datasets/HuggingFaceFW/fineweb) | sample-10BT: a subset randomly sampled from the whole dataset of around 10B gpt2 tokens (10B) |
-| Ultra-FineWeb | [Ultra-FineWeb](https://huggingface.co/datasets/openbmb/Ultra-FineWeb) | Ultra-FineWeb is a large-scale, high-quality, and efficiently-filtered dataset(120B) |
+| Ultra-FineWeb | [Ultra-FineWeb](https://huggingface.co/datasets/openbmb/Ultra-FineWeb) | Ultra-FineWeb is a large-scale, high-quality, and efficiently-filtered dataset(1T[en]+120B[zh]) |
 | Firefly pretrain | [firefly-pretrain](https://huggingface.co/datasets/YeungNLP/firefly-pretrain-dataset) | Firefly 模型训练的部分中文数据(4.7B) |
+| Mxode/Chinese-Instruct |[Chinese-Instruct](https://huggingface.co/datasets/Mxode/Chinese-Instruct) | 中文指令微调数据集(100B) |
+
 
 #### summary
 
 - buddygpt-0.1b-base-zh
-![step3500](static/0.1b-output-step3500.png)
-![buddygpt-0.1b-base-zh](static/0.1b-step3500.png)
+![step8600](static/step8600-zh.png)
+![step8600](static/step8600-en.png)
+![train_metrics](static/01b-train-metrics.png)
+
 - buddygpt-0.2b-base-zh
 ![buddygpt-0.2b-base-zh](static/buddygpt-0.2b-base-zh.png)
+
 - buddygpt-0.4b-base-zh
 ![buddygpt-0.4b-base-zh](static/buddygpt-0.2b-base-zh.png)
 ![step1200](static/step1200.png)
@@ -51,14 +52,13 @@ graph LR
 ![step10000](static/step10000.png) 可以看到开始有北京了，这时候loss=3.8
  
 #### metrics
-|model|cmmlu@0|cmmlu@5|gpqa|ifeval|aime24|math-500|livecodebench|
-|-|-|-|-|-|-|-|-|
-|[buddygpt-0.2b-base-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-base-zh)|*25.47*|*25.47*|0.1|0.1|0.1|0.1|0.1|
-|[buddygpt-0.2b-chat-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-chat-zh)|*25.08*|*25.10*|0.1|0.1|0.1|0.1|0.1|
-|[buddygpt-0.2b-dpo-zh](https://huggingface.co/learn2pro/buddygpt-0.2b-chat-zh)|*25.08*|*25.85*|0.1|0.1|0.1|0.1|0.1|
-|deepseek-v3|**88.8**|**88.8**|59.1|**86.1**|39.2|**90.2**|37.6|
-|qwen3-0.6b|35.29|32.88|-|-|-|32.44|-|
-|qwen2.5-0.5b|41.44|39.23|-|-|-|32.44|-|
+|model|cmmlu|mmlu|ceval|gpqa|ifeval|aime24|math-500|livecodebench|
+|-|-|-|-|-|-|-|-|-|
+|[buddygpt-0.1b-base](https://huggingface.co/learn2pro/buddygpt-0.1b-base)|*25.38*|*24.64*|*24.29*|25.38|25.06|0.1|0.1|0.1|
+|deepseek-r1|-|**90.8**|-|59.1|**86.1**|39.2|**90.2**|37.6|
+|deepseek-v3|**88.8**|88.5|**90.1**|59.1|**86.1**|39.2|**90.2**|37.6|
+|qwen2.5-0.5b|41.44|45.2|39.23|-|-|-|32.44|-|
+|qwen3-0.6b|35.29|37.56|37.6|-|-|-|32.44|-|
 
 
 ## SFT
@@ -67,11 +67,20 @@ SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要�
 
 | SFT微调数据 | 链接                                                         | 描述                                       |
 | ----------- | ------------------------------------------------------------ | ------------------------------------------ |
-| Mxode/Chinese-Instruct-Lite |[Mxode/Chinese-Instruct-Lite](https://huggingface.co/datasets/Mxode/Chinese-Instruct-Lite/viewer/general) | 一个全新的简化数据集 |
-| Belle       | [Belle](https://huggingface.co/datasets/BelleGroup/train_2M_CN) | 包含约200万条由BELLE项目生成的中文指令数据 |
-| Firefly     | [Firefly](https://huggingface.co/datasets/YeungNLP/firefly-train-1.1M) | 流萤开源模型SFT数据集                      |
-| TigerBot    | [tigerBot](https://huggingface.co/datasets/TigerResearch/sft_zh) | TigerBot 模型SFT数据集                     |
-| YeungNLP/moss-003-sft-data |[YeungNLP/moss-003-sft-data](https://huggingface.co/datasets/YeungNLP/moss-003-sft-data)|YeungNLP|
+| Mxode/Chinese-Instruct-Lite |[Chinese-Instruct-Lite](https://huggingface.co/datasets/Mxode/Chinese-Instruct-Lite/viewer/general) | 一个全新的简化数据集 |
+| Belle       | [Belle_train](https://huggingface.co/datasets/BelleGroup/train_2M_CN) | 包含约200万条由BELLE项目生成的中文指令数据 |
+| YeungNLP/moss-003-sft-data |[moss-003-sft-data](https://huggingface.co/datasets/YeungNLP/moss-003-sft-data)|YeungNLP|
+| shareAI/ShareGPT-Chinese-English-90k |[ShareGPT-Chinese-English-90k](https://huggingface.co/datasets/shareAI/ShareGPT-Chinese-English-90k) | A high-quality Chinese-English parallel bilingual human-machine QA dataset |
+
+#### metrics
+|model|cmmlu|mmlu|ceval|gpqa|ifeval|aime24|math-500|livecodebench|
+|-|-|-|-|-|-|-|-|-|
+|[buddygpt-0.1b-base](https://huggingface.co/learn2pro/buddygpt-0.1b-base)|*25.38*|*24.64*|*24.29*|25.38|25.06|0.1|0.1|0.1|
+|[buddygpt-0.1b-chat](https://huggingface.co/learn2pro/buddygpt-0.1b-chat)|*25.19*|*24.47*|*31.75*|25.38|25.06|0.1|0.1|0.1|
+|deepseek-r1|-|**90.8**|-|59.1|**86.1**|39.2|**90.2**|37.6|
+|deepseek-v3|**88.8**|88.5|**90.1**|59.1|**86.1**|39.2|**90.2**|37.6|
+|qwen2.5-0.5b|41.44|45.2|39.23|-|-|-|32.44|-|
+|qwen3-0.6b|35.29|37.56|37.6|-|-|-|32.44|-|
 
 
 ## RLHF
@@ -80,9 +89,11 @@ SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要�
 
 | DPO微调数据 | 链接                                                         | 描述                                       |
 | ----------- | ------------------------------------------------------------ | ------------------------------------------ |
-| FuseAI/FuseChat-3.0-DPO-Data       | [FuseAI/FuseChat-3.0-DPO-Data](https://huggingface.co/datasets/FuseAI/FuseChat-3.0-DPO-Data/viewer/default/train?row=0&views%5B%5D=train) | 包含约200万条由BELLE项目生成的中文指令数据 |
+| FuseAI/FuseChat-3.0-DPO-Data       | [FuseAI/FuseChat-3.0-DPO-Data](https://huggingface.co/datasets/FuseAI/FuseChat-3.0-DPO-Data) | 包含约200万条由BELLE项目生成的中文指令数据 |
 | Hello-SimpleAI/HC3-Chinese     | [Hello-SimpleAI/HC3-Chinese](https://huggingface.co/datasets/Hello-SimpleAI/HC3-Chinese) | 流萤开源模型SFT数据集                      |
 |YeungNLP/ultrafeedback_binarized|[YeungNLP/ultrafeedback_binarized](https://huggingface.co/datasets/YeungNLP/ultrafeedback_binarized)|YeungNLP DPO|
+|HuggingFaceH4/ultrafeedback_binarized|[HuggingFaceH4/ultrafeedback_binarized](https://huggingface.co/datasets/HuggingFaceH4/ultrafeedback_binarized)| HuggingFaceH4/ultrafeedback_binarized |
+
 
 ## code structure
 
@@ -132,22 +143,15 @@ lm_eval --model hf \
     --device cuda:0 \
     --batch_size 32
 
-all_proxy= evalscope eval \
- --model outputs/buddygpt-qwen3 \
- --model-args precision=torch.bfloat16,device_map=auto \
- --datasets cmmlu
+all_proxy= python eval/eval.py
 
-all_proxy= evalscope eval \
- --model outputs/checkpoint-22614 \
- --datasets cmmlu \
- --limit 10
 ```
 
 - push_to_hub:
 ```
 huggingface-cli login
-huggingface-cli repo create buddygpt-0.2b-chat-zh --type model
-huggingface-cli upload learn2pro/buddygpt-0.2b-chat-zh .
+huggingface-cli repo create buddygpt-0.1b-base --type model
+huggingface-cli upload learn2pro/buddygpt-0.1b-chat .
 ```
 
 - push to modelscope:

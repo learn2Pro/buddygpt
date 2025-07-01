@@ -3,7 +3,7 @@ import model.modeling_tinyllm
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_id", type=str, default='outputs/buddygpt-0.2b-base-zh')
+parser.add_argument("--model_id", type=str, default='outputs/buddygpt-0.1b-base')
 parser.add_argument("--batch_size", type=int, default=16)
 parser.add_argument("--few_shot", type=int, default=5)
 args = parser.parse_args()
