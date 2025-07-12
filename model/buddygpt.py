@@ -12,32 +12,53 @@ from transformers.generation import utils
 from dataclasses import dataclass
 
 
+# class GPTConfig(PretrainedConfig):
+#     model_type = "buddygpt"
+
+#     def __init__(
+#         self,
+#         n_block=1024,
+#         n_layer=16,
+#         n_head=16,
+#         n_kv_head=8,
+#         n_embed=1536,
+#         n_vocab=151669,
+#         pad_token_id=151643,
+#         eos_token_id=151645,
+#         tie_word_embeddings=True,
+#         **kwargs,
+#     ):
+#         super().__init__(**kwargs)
+#         self.n_block = n_block
+#         self.n_layer = n_layer
+#         self.n_head = n_head
+#         self.n_embed = n_embed
+#         self.n_vocab = n_vocab
+#         self.n_kv_head = n_kv_head
+#         self.pad_token_id = pad_token_id
+#         self.eos_token_id = eos_token_id
+#         self.tie_word_embeddings = tie_word_embeddings
+        
+@dataclass
 class GPTConfig(PretrainedConfig):
     model_type = "buddygpt"
+    
+    n_block:int = 1024
+    n_layer:int = 16
+    n_head:int = 16
+    n_kv_head:int = 8
+    n_embed:int = 1536
+    n_vocab:int = 151669
+    pad_token_id:int = 151643
+    eos_token_id:int = 151645
+    tie_word_embeddings = True
 
-    def __init__(
-        self,
-        n_block=1024,
-        n_layer=16,
-        n_head=16,
-        n_kv_head=8,
-        n_embed=1536,
-        n_vocab=151669,
-        pad_token_id=151643,
-        eos_token_id=151645,
-        tie_word_embeddings=True,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.n_block = n_block
-        self.n_layer = n_layer
-        self.n_head = n_head
-        self.n_embed = n_embed
-        self.n_vocab = n_vocab
-        self.n_kv_head = n_kv_head
-        self.pad_token_id = pad_token_id
-        self.eos_token_id = eos_token_id
-        self.tie_word_embeddings = tie_word_embeddings
+    # mla
+    q_lora_rank: int = 16
+    qk_rope_head_dim: int = 4
+    kv_lora_rank: int = 16
+    v_head_dim: int = 16
+    qk_nope_head_dim: int = 12
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

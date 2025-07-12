@@ -393,7 +393,7 @@ class SdpaAttention(SelfAttention):
             value_states = value_states.contiguous()
 
         # 使用scaled_dot_product_attention进行计算
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
+        attn_output = F.scaled_dot_product_attention(
             query_states,
             key_states,
             value_states,
@@ -413,12 +413,103 @@ class SdpaAttention(SelfAttention):
         return attn_output, None, past_key_value
 
 
+class MLA(nn.Module):
+    def __init__(self, config, layer_idx: Optional[int] = None):
+        super().__init__()
+        self.layer_idx = layer_idx
+        self.n_embed = config.hidden_size
+        self.n_head = config.num_attention_heads
+
+        self.rope_emb = RotaryEmbedding(config.qk_rope_head_dim)
+
+        self.q_lora_rank = config.q_lora_rank
+        self.qk_rope_head_dim = config.qk_rope_head_dim
+
+        self.kv_lora_rank = config.kv_lora_rank
+
+        self.v_head_dim = config.v_head_dim
+
+        self.qk_nope_head_dim = config.qk_nope_head_dim
+
+        self.q_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
+
+        # q latent proj
+        self.q_down_proj = nn.Linear(self.n_embed, self.q_lora_rank, bias=False)
+        self.q_down_layernorm = nn.RMSNorm(self.q_lora_rank)
+        self.q_up_proj = nn.Linear(self.q_lora_rank, self.n_head * self.q_head_dim, bias=False)
+
+        # kv latent proj
+        self.kv_down_proj = nn.Linear(self.n_embed, self.kv_lora_rank + self.qk_rope_head_dim, bias=False)
+        self.kv_down_layernorm = nn.RMSNorm(self.kv_lora_rank)
+        self.kv_up_proj = nn.Linear(self.kv_lora_rank, self.n_head * (self.qk_nope_head_dim + self.v_head_dim), bias=False)
+
+        self.o_proj = nn.Linear(self.n_head * self.v_head_dim, self.n_embed, bias=False)
+
+    def forward(
+        self, 
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+    ):
+        bsz, q_len, _ = hidden_states.size()
+
+        q = self.q_down_proj(hidden_states)
+        q = self.q_down_layernorm(q)
+        q = self.q_up_proj(q)
+        q = q.view(bsz, q_len, self.n_head, self.q_head_dim).transpose(1, 2)
+        q_nope, q_rope = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        compress_kv = self.kv_down_proj(hidden_states)
+        # print('compress_kv', compress_kv.shape)
+        compress_kv, k_rope = torch.split(compress_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        k_rope = k_rope.view(bsz, seq_len, 1, self.qk_rope_head_dim).expand(bsz, seq_len, n_head, self.qk_rope_head_dim).transpose(1, 2)
+        kv = self.kv_up_proj(self.kv_down_layernorm(compress_kv)).view(bsz, seq_len, n_head, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
+        k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+
+        kv_seq_len = value_states.shape[-2] # bsz, n_head, q_len, v_head_dim
+
+        cos, sin = self.rope_emb(value_states, seq_len=kv_seq_len)
+
+        q_rope, k_rope = apply_rotary_pos_emb(q_rope, k_rope, cos, sin)
+
+        # print('q_nope', q_nope.shape, 'q_rope', q_rope.shape)
+        # print('k_nope', k_nope.shape, 'k_rope', k_rope.shape)
+        query_states = torch.cat([q_nope, q_rope], dim=-1) # bsz, n_head, q_len, q_head_dim
+        key_states = torch.cat([k_nope, k_rope], dim=-1) # bsz, n_head, q_len, q_head_dim
+
+        # compute attention weights
+        # attn_weights = torch.matmul(query_states, key_states.transpose(2,3)) # bsz, n_head, q_len, q_len
+        # attn_weights = attn_weights / self.q_head_dim ** 0.5
+
+        # attn_weights = F.softmax(attn_weights, dim=-1) # bsz, n_head, q_len, q_len
+        # attn_output = attn_weights @ value_states 
+        # attn_output = attn_output.transpose(1, 2).reshape(bsz, q_len, -1) # bsz, q_len, n_head * v_head_dim
+        # 使用scaled_dot_product_attention进行计算
+        attn_output = F.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=attention_mask,
+            # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
+            is_causal=attention_mask is None and q_len > 1,
+        )  # bsz, q_len, n_head * v_head_dim
+        print(query_states.shape, key_states.shape, value_states.shape, attn_output.shape)
+        attn_output = self.o_proj(attn_output.reshape(bsz, q_len, -1)) # bsz, q_len, n_embed
+        
+        
+        return attn_output, None, past_key_value
+        
+        
+
 class DecoderLayer(nn.Module):
     def __init__(self, config: BuddyGPTConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.self_attn = (SdpaAttention(config, layer_idx) if config._attn_implementation == "sdpa" else SelfAttention(config, layer_idx))
+        self.self_attn = (SdpaAttention(config, layer_idx) if config._attn_implementation == "sdpa" else (MLA(config, layer_idx) if config._attn_implementation == "mla" else SelfAttention(config, layer_idx)))
+        
         self.mlp = GateMLP(config)
         self.input_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)

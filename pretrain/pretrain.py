@@ -81,8 +81,12 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
         return result
 
     def encode(examples, field: str = 'text'):
-        result = tokenizer(examples[field])
-        return result
+        try:
+            result = tokenizer(examples[field])
+            return result
+        except e:
+            print(f"Error processing example: {e}")
+            return None
 
     def encode_instruction(examples):
         input_ids = []
@@ -91,6 +95,7 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
             instruction = examples['prompt'][i]
             response = examples['response'][i]
             build_instruction = f"### Instruction:\n{instruction}\n### Response:\n{response}"
+            # print(build_instruction)
             tokenized_instruction = tokenizer(build_instruction)
             input_ids.append(tokenized_instruction['input_ids'])
             attention_mask.append(tokenized_instruction['attention_mask'])
@@ -119,21 +124,32 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
                 data_files="data/Ultra-FineWeb/data/ultrafineweb_zh/ultrafineweb-zh-*.parquet",
                 split='train',
                 # num_proc=num_proc,
-            ).filter(lambda x: float(x['score']) >= 0.85, num_proc=num_proc)
+                # streaming=True,
+            ).filter(lambda x: float(x['score']) >= 0.85, 
+                 num_proc=num_proc
+            )
             
             # ~ 4.176B token
             # en_web_ds = load_dataset("openbmb/Ultra-FineWeb", split="en").filter(lambda x: x['score'] >= 0.99, num_proc=num_proc)
-            # ~60B
+            # ~30B
             en_web_ds = load_dataset(
                 "parquet",
-                data_files="data/Ultra-FineWeb/data/ultrafineweb_en/ultrafineweb-en-part-0[0-3][0-9][0-9]-of-2048.parquet",
-                split='train[:]',
-                num_proc=num_proc,
-            ).filter(lambda x: float(x['score']) >= 0.85, num_proc=num_proc)
+                data_files="data/Ultra-FineWeb/data/ultrafineweb_en/ultrafineweb-en-part-0[0-1][0-9][0-9]-of-2048.parquet",
+                split='train',
+                # num_proc=num_proc,
+                # streaming=True,
+            ).filter(lambda x: float(x['score']) >= 0.85, 
+                 num_proc=num_proc
+            )
             
             # wikipedia ds ~= 0.77B
             # wiki_ds = load_dataset("data/wikipedia", "20231101.zh", split="train")
-            wiki_ds = load_dataset("parquet", data_files="data/wikipedia/20231101.zh/*.parquet", split='train')
+            wiki_ds = load_dataset(
+                "parquet", 
+                data_files="data/wikipedia/20231101.zh/*.parquet", 
+                split='train',
+                # streaming=True,
+            )
 
             # 0.235B + 0.5B
             instruct_ds = load_dataset(
@@ -141,6 +157,7 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
                 data_files="data/Chinese-Instruct/**/*.jsonl",
                 split="train",
                 # num_proc=num_proc,
+                # streaming=True,
             )
             # firefly ds
             # 4.7B token
@@ -157,15 +174,26 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
             # ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
             # novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
             # novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-            zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=zh_web_ds.column_names)
-            zh_web_ds = zh_web_ds.map(group_texts, batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=zh_web_ds.column_names)
-            en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=en_web_ds.column_names)
-            en_web_ds = en_web_ds.map(group_texts, batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=en_web_ds.column_names)
-            wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=[])
-            wiki_ds = wiki_ds.map(group_texts, batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=wiki_ds.column_names)
-
-            instruct_ds = instruct_ds.map(encode_instruction, batch_size=batch_size, num_proc=num_proc, remove_columns=instruct_ds.column_names)
-            instruct_ds = instruct_ds.map(group_texts, batched=True, batch_size=batch_size, num_proc=num_proc, remove_columns=instruct_ds.column_names)
+            zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=zh_web_ds.column_names,
+                                     num_proc=num_proc,
+                                 ).map(group_texts, batched=True, batch_size=batch_size,
+                                     num_proc=num_proc,
+                                 )
+            en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=en_web_ds.column_names,
+                                     num_proc=num_proc,
+                                 ).map(group_texts, batched=True, batch_size=batch_size,
+                                     num_proc=num_proc,
+                                 )
+            wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, batch_size=batch_size, remove_columns=[],
+                                     num_proc=num_proc,
+                             ).map(group_texts, batched=True, batch_size=batch_size,
+                                     num_proc=num_proc,
+                             )
+            instruct_ds = instruct_ds.map(encode_instruction, batched=True, batch_size=batch_size, remove_columns=instruct_ds.column_names,
+                                         num_proc=num_proc,
+                                     ).map(group_texts, batched=True, batch_size=batch_size,
+                                         num_proc=num_proc,
+                                     )
             
             ds = concatenate_datasets([zh_web_ds, en_web_ds, wiki_ds, instruct_ds])
             print(ds)
@@ -239,7 +267,7 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
         save_total_limit=10,
         bf16=True,
         # fp16=True,
-        # max_steps=30000,
+        # max_steps=500000,
         # remove_unused_columns=False,
         max_grad_norm=1.0,
         # gradient_checkpointing=True,

@@ -29,7 +29,12 @@ class BuddyGPTConfig(PretrainedConfig):
         rope_theta=10000.0,
         attention_dropout=0.0,
         _attn_implementation="sdpa",
-        **kwargs
+        q_lora_rank: int = 16,
+        qk_rope_head_dim: int = 4,
+        kv_lora_rank: int = 16,
+        v_head_dim: int = 16,
+        qk_nope_head_dim: int = 12,
+        **kwargs,
     ):
         self.vocab_size = vocab_size
         self.num_seq_len = num_seq_len
@@ -50,6 +55,13 @@ class BuddyGPTConfig(PretrainedConfig):
         self.rope_theta = rope_theta
         self.attention_dropout = attention_dropout   
         self._attn_implementation = _attn_implementation
+
+        # mla
+        self.q_lora_rank = q_lora_rank
+        self.qk_rope_head_dim = qk_rope_head_dim
+        self.kv_lora_rank = kv_lora_rank
+        self.v_head_dim = v_head_dim
+        self.qk_nope_head_dim = qk_nope_head_dim
             
         super().__init__(
             pad_token_id=pad_token_id,
