@@ -464,11 +464,19 @@ class MLA(nn.Module):
         compress_kv = self.kv_down_proj(hidden_states)
         # print('compress_kv', compress_kv.shape)
         compress_kv, k_rope = torch.split(compress_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-        k_rope = k_rope.view(bsz, seq_len, 1, self.qk_rope_head_dim).expand(bsz, seq_len, n_head, self.qk_rope_head_dim).transpose(1, 2)
-        kv = self.kv_up_proj(self.kv_down_layernorm(compress_kv)).view(bsz, seq_len, n_head, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
+        k_rope = k_rope.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
+        kv = self.kv_up_proj(self.kv_down_layernorm(compress_kv)).view(bsz, q_len, n_head, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
         k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
 
         kv_seq_len = value_states.shape[-2] # bsz, n_head, q_len, v_head_dim
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
 
         cos, sin = self.rope_emb(value_states, seq_len=kv_seq_len)
 
@@ -476,8 +484,18 @@ class MLA(nn.Module):
 
         # print('q_nope', q_nope.shape, 'q_rope', q_rope.shape)
         # print('k_nope', k_nope.shape, 'k_rope', k_rope.shape)
-        query_states = torch.cat([q_nope, q_rope], dim=-1) # bsz, n_head, q_len, q_head_dim
-        key_states = torch.cat([k_nope, k_rope], dim=-1) # bsz, n_head, q_len, q_head_dim
+        query_states = k_rope.new_empty(bsz, n_head, q_len, self.q_head_dim)
+        query_states[:, :, :, :self.qk_nope_head_dim] = q_nope
+        query_states[:, :, :, self.qk_nope_head_dim:] = q_rope
+
+        key_states = k_rope.new_empty(bsz, n_head, q_len, self.q_head_dim)
+        key_states[:, :, :, :self.qk_nope_head_dim] = k_nope
+        key_states[:, :, :, self.qk_nope_head_dim:] = k_rope
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
 
         # compute attention weights
         # attn_weights = torch.matmul(query_states, key_states.transpose(2,3)) # bsz, n_head, q_len, q_len
