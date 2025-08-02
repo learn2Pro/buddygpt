@@ -41,7 +41,7 @@ def do_sample(tokenizer, model, prompt, max_new_tokens=128):
     return gen_text
 
 def load_dpo_dataset(tokenizer, num_proc:int, seq_len:int):
-    ds = load_dataset("Anthropic/hh-rlhf", split="train")
+    ds = load_dataset("FuseAI/FuseChat-3.0-DPO-Data", split="train")
     
     print(ds)
     return ds

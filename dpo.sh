@@ -6,8 +6,8 @@
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 python rlhf/dpo.py \
-    --output_dir outputs/buddygpt-0.1b-dpo \
-    --model_id outputs/buddygpt-0.1b-chat \
+    --output_dir outputs/buddygpt-0.3b-dpo \
+    --model_id outputs/buddygpt-0.3b-chat \
     --block_size 1024 \
-    --batch_size 4 \
-    --gradient_accumulation_steps 128
+    --batch_size 1 \
+    --gradient_accumulation_steps 256

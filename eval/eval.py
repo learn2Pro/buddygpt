@@ -11,9 +11,9 @@ args = parser.parse_args()
 
 task_cfg = {
     'model': args.model_id,
-    'datasets': ['ceval'],
+    'datasets': ['ceval','mmlu','cmmlu'],
     'eval_batch_size': args.batch_size,
-    'dataset_args': {'cmmlu':{'few_shot_num': args.few_shot}, 'ceval':{'few_shot_num': args.few_shot}},
+    'dataset_args': {'mmlu':{'few_shot_num': args.few_shot}, 'cmmlu':{'few_shot_num': args.few_shot}, 'ceval':{'few_shot_num': args.few_shot}},
 }
 
 run_task(task_cfg=task_cfg)

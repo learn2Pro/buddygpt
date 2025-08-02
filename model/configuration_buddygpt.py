@@ -34,6 +34,16 @@ class BuddyGPTConfig(PretrainedConfig):
         kv_lora_rank: int = 16,
         v_head_dim: int = 16,
         qk_nope_head_dim: int = 12,
+        n_expert=None,
+        n_expert_per_token=2,
+        n_group=2,
+        n_topk_group=1,
+        norm_topk_prob=True,
+        routed_scaling_factor=0.2,
+        scoring_func='sigmoid',
+        topk_method='noaux_tc',
+        moe_intermediate_size=10,
+        n_shared_experts=2,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -62,6 +72,18 @@ class BuddyGPTConfig(PretrainedConfig):
         self.kv_lora_rank = kv_lora_rank
         self.v_head_dim = v_head_dim
         self.qk_nope_head_dim = qk_nope_head_dim
+
+        # moe
+        self.n_expert = n_expert
+        self.n_expert_per_token = n_expert_per_token
+        self.n_group = n_group
+        self.n_topk_group = n_topk_group
+        self.norm_topk_prob = norm_topk_prob
+        self.routed_scaling_factor=routed_scaling_factor
+        self.scoring_func = scoring_func
+        self.topk_method = topk_method
+        self.moe_intermediate_size = moe_intermediate_size
+        self.n_shared_experts = n_shared_experts
             
         super().__init__(
             pad_token_id=pad_token_id,
