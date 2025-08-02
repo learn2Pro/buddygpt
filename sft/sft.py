@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import model.modeling_buddygpt
-import model.modeling_tinyllm
+import model.modeling_buddygpt
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -12,7 +12,6 @@ def print_parameters(model):
         [param.numel() for param in model.parameters() if param.requires_grad]
     )
     print(f"total param {num_param/1024/1024}m")
-
 
 
 def load_tokenizer_model(model_id, seq_len, device):

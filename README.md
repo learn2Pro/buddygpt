@@ -59,6 +59,8 @@ graph LR
 |deepseek-v3|**88.8**|88.5|**90.1**|59.1|**86.1**|39.2|**90.2**|37.6|
 |qwen2.5-0.5b|41.44|45.2|39.23|-|-|-|32.44|-|
 |qwen3-0.6b|35.29|37.56|37.6|-|-|-|32.44|-|
+|buddy-0.3b-base|25.6|25.04|28.6|-|-|-|32.44|-|
+|buddy-0.3b-chat|25.37|25.04|25.85|-|-|-|32.44|-|
 
 
 ## SFT
@@ -71,6 +73,7 @@ SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要�
 | Belle       | [Belle_train](https://huggingface.co/datasets/BelleGroup/train_2M_CN) | 包含约200万条由BELLE项目生成的中文指令数据 |
 | YeungNLP/moss-003-sft-data |[moss-003-sft-data](https://huggingface.co/datasets/YeungNLP/moss-003-sft-data)|YeungNLP|
 | shareAI/ShareGPT-Chinese-English-90k |[ShareGPT-Chinese-English-90k](https://huggingface.co/datasets/shareAI/ShareGPT-Chinese-English-90k) | A high-quality Chinese-English parallel bilingual human-machine QA dataset |
+| FuseChat-3.0-SFT-Data       | [FuseChat-3.0-SFT-Data](https://huggingface.co/datasets/FuseAI/FuseChat-3.0-SFT-Data) | FuseChat-3.0: Preference Optimization for Implicit Model Fusion |
 
 #### metrics
 |model|cmmlu|mmlu|ceval|gpqa|ifeval|aime24|math-500|livecodebench|
@@ -155,8 +158,8 @@ transformers chat learn2pro/buddygpt-0.1b-chat
 - push_to_hub:
 ```
 huggingface-cli login
-huggingface-cli repo create buddygpt-0.1b-base --type model
-huggingface-cli upload learn2pro/buddygpt-0.1b-chat .
+huggingface-cli repo create buddygpt-0.3b-chat --type model
+huggingface-cli upload learn2pro/buddygpt-0.3b-chat .
 ```
 
 - push to modelscope:
