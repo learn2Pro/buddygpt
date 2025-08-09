@@ -14,15 +14,15 @@ export WANDB_BASE_URL=https://api.bandw.top
 export HF_ENDPOINT=https://hf-mirror.com
 
 python pretrain/pretrain.py \
-    --output_dir outputs/buddygpt-0.4b-moe-base \
+    --output_dir outputs/buddygpt-0.3b-base \
     --block_size 1024 \
     --n_embed 1024 \
     --n_head 16 \
     --n_kv_head 8 \
     --n_layer 24 \
-    --batch_size 4 \
+    --batch_size 20 \
     --attn_impl sdpa \
-    --gradient_accumulation_steps 512
+    --gradient_accumulation_steps 64
 
 python pretrain/pretrain.py \
     --output_dir outputs/buddygpt-0.7b-moe-mla-base \
@@ -41,8 +41,8 @@ python pretrain/pretrain.py \
     --n_group 2 \
     --n_topk_group 1 \
     --moe_intermediate_size 256 \
-    --batch_size 2 \
-    --gradient_accumulation_steps 1024
+    --batch_size 14 \
+    --gradient_accumulation_steps 768
 
 # python pretrain/pretrain.py \
 #     --output_dir outputs/buddygpt-0.3b-cpt \

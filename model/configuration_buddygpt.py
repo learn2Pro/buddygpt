@@ -28,6 +28,7 @@ class BuddyGPTConfig(PretrainedConfig):
         tie_word_embeddings=False,
         rope_theta=100000.0,
         attention_dropout=0.0,
+        attn_impl="mla",
         _attn_implementation="sdpa",
         q_lora_rank: int = 16,
         qk_rope_head_dim: int = 4,
@@ -64,7 +65,7 @@ class BuddyGPTConfig(PretrainedConfig):
         self.use_cache = use_cache
         self.rope_theta = rope_theta
         self.attention_dropout = attention_dropout   
-        self._attn_implementation = _attn_implementation
+        self.attn_impl = attn_impl
 
         # mla
         self.q_lora_rank = q_lora_rank

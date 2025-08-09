@@ -465,7 +465,7 @@ class MLA(nn.Module):
         # print('compress_kv', compress_kv.shape)
         compress_kv, k_rope = torch.split(compress_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         k_rope = k_rope.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
-        kv = self.kv_up_proj(self.kv_down_layernorm(compress_kv)).view(bsz, q_len, n_head, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
+        kv = self.kv_up_proj(self.kv_down_layernorm(compress_kv)).view(bsz, q_len, self.n_head, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
         k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
 
         kv_seq_len = value_states.shape[-2] # bsz, n_head, q_len, v_head_dim
@@ -480,15 +480,15 @@ class MLA(nn.Module):
 
         cos, sin = self.rope_emb(value_states, seq_len=kv_seq_len)
 
-        q_rope, k_rope = apply_rotary_pos_emb(q_rope, k_rope, cos, sin)
+        q_rope, k_rope = apply_rotary_pos_emb(q_rope, k_rope, cos[kv_seq_len-q_len:], sin[kv_seq_len-q_len:])
 
         # print('q_nope', q_nope.shape, 'q_rope', q_rope.shape)
         # print('k_nope', k_nope.shape, 'k_rope', k_rope.shape)
-        query_states = k_rope.new_empty(bsz, n_head, q_len, self.q_head_dim)
+        query_states = k_rope.new_empty(bsz, self.n_head, q_len, self.q_head_dim)
         query_states[:, :, :, :self.qk_nope_head_dim] = q_nope
         query_states[:, :, :, self.qk_nope_head_dim:] = q_rope
 
-        key_states = k_rope.new_empty(bsz, n_head, q_len, self.q_head_dim)
+        key_states = k_rope.new_empty(bsz, self.n_head, q_len, self.q_head_dim)
         key_states[:, :, :, :self.qk_nope_head_dim] = k_nope
         key_states[:, :, :, self.qk_nope_head_dim:] = k_rope
         if past_key_value is not None:
@@ -513,7 +513,7 @@ class MLA(nn.Module):
             # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
             is_causal=attention_mask is None and q_len > 1,
         )  # bsz, q_len, n_head * v_head_dim
-        print(query_states.shape, key_states.shape, value_states.shape, attn_output.shape)
+        # print(query_states.shape, key_states.shape, value_states.shape, attn_output.shape)
         attn_output = self.o_proj(attn_output.reshape(bsz, q_len, -1)) # bsz, q_len, n_embed
         
         
@@ -665,8 +665,15 @@ class DecoderLayer(nn.Module):
     def __init__(self, config: BuddyGPTConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
+        self.attn_impl = config.attn_impl
 
-        self.self_attn = (SdpaAttention(config, layer_idx) if config._attn_implementation == "sdpa" else (MLA(config, layer_idx) if config._attn_implementation == "mla" else SelfAttention(config, layer_idx)))
+        if self.attn_impl == 'sdpa': 
+            self.self_attn = SdpaAttention(config, layer_idx)
+        elif self.attn_impl == 'mla':
+            self.self_attn = MLA(config, layer_idx)
+        else:
+            self.self_attn = SelfAttention(config, layer_idx)
+            
         
         self.mlp = GateMLP(config) if config.n_expert is None else MOELayer(config)
         self.input_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -766,8 +773,9 @@ class BuddyGPTModel(BuddyPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
+        # print('config' ,config.attn_impl)
+        self._attn_implementation = "sdpa"
         self.layers = nn.ModuleList([DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
-        self._attn_implementation = config._attn_implementation
         self.norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False

@@ -34,7 +34,7 @@ def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, n_kv
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         tie_word_embeddings=True,
-        _attn_implementation=attn_impl,
+        attn_impl=attn_impl,
         q_lora_rank = q_lora_rank,
         qk_rope_head_dim = qk_rope_head_dim,
         qk_nope_head_dim = qk_nope_head_dim,
@@ -45,8 +45,9 @@ def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, n_kv
         n_group = n_group,
         n_topk_group = n_topk_group,
         moe_intermediate_size = moe_intermediate_size,
-        
     )
+    # print('outer config', config)
+    
     model = BuddyGPTForCausalLM(config)
     print(tokenizer.pad_token, tokenizer.pad_token_id)
     print(tokenizer.eos_token, tokenizer.eos_token_id)
@@ -359,7 +360,6 @@ def main():
             n_kv_head=args.n_kv_head,
             attn_impl=args.attn_impl,
             device=device,
-            
             q_lora_rank=args.q_lora_rank,
             qk_rope_head_dim=args.qk_rope_head_dim,
             qk_nope_head_dim=args.qk_nope_head_dim,
