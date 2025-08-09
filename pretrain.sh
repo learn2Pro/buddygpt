@@ -1,3 +1,7 @@
+# download data
+sudo apt update
+sudo apt install aria2 -y
+
 # install miniconda3
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && bash Miniconda3-latest-Linux-x86_64.sh
 conda create -n rl python=3.10
