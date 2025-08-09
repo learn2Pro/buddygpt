@@ -4,24 +4,56 @@
 > with RoPE, GQA, SWiGLU, RMSNorm, weight-tying, FLASH-ATTENTION
 
 |model|Tied Embedding|RoPE|MLA|MOE|Q-head|KV-head|n_embed|n_layer|seq_len|batch_size(token)|loss|
-|-|-|-|-|-|-|-|-|-|-|
+|-|-|-|-|-|-|-|-|-|-|-|-|
 |buddygpt-0.1b|✅|✅|❌|❌|16|8|768|8|1024|20*64k|3.5766|
 |buddygpt-0.3b|✅|✅|❌|❌|16|8|1024|24|1024|20*64k|-|
 |buddygpt-0.7b|✅|✅|✅(q_lora=16,q_rope=24,q_nope=72,v_dim=96)|✅(n_expert=12,share=2,activate=2)|16|-|**1536**|**24**|1024|**2*1024k**|-|
 
+
 ```
-0.7b
+> **0.3b**
+BuddyGPTForCausalLM(
+  (model): BuddyGPTModel(
+    (embed_tokens): Embedding(151669, 1024)
+    (layers): ModuleList(
+      (0-23): 24 x DecoderLayer(
+        (self_attn): SdpaAttention(
+          (q_proj): Linear(in_features=1024, out_features=1024, bias=True)
+          (k_proj): Linear(in_features=1024, out_features=512, bias=True)
+          (v_proj): Linear(in_features=1024, out_features=512, bias=True)
+          (o_proj): Linear(in_features=1024, out_features=1024, bias=False)
+          (rotary_emb): RotaryEmbedding()
+        )
+        (mlp): GateMLP(
+          (gate_proj): Linear(in_features=1024, out_features=2048, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=2048, bias=False)
+          (down_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (act_fn): SiLU()
+        )
+        (input_layernorm): RMSNorm((1024,), eps=1e-06, elementwise_affine=True)
+        (post_layernorm): RMSNorm((1024,), eps=1e-06, elementwise_affine=True)
+      )
+    )
+    (norm): RMSNorm((1024,), eps=1e-06, elementwise_affine=True)
+  )
+  (lm_head): Linear(in_features=1024, out_features=151669, bias=False)
+)
+
+> **0.7b**
 BuddyGPTForCausalLM(
   (model): BuddyGPTModel(
     (embed_tokens): Embedding(151669, 1536)
     (layers): ModuleList(
       (0-23): 24 x DecoderLayer(
-        (self_attn): SdpaAttention(
-          (q_proj): Linear(in_features=1536, out_features=1536, bias=True)
-          (k_proj): Linear(in_features=1536, out_features=768, bias=True)
-          (v_proj): Linear(in_features=1536, out_features=768, bias=True)
+        (self_attn): MLA(
+          (rope_emb): RotaryEmbedding()
+          (q_down_proj): Linear(in_features=1536, out_features=16, bias=False)
+          (q_down_layernorm): RMSNorm((16,), eps=None, elementwise_affine=True)
+          (q_up_proj): Linear(in_features=16, out_features=1536, bias=False)
+          (kv_down_proj): Linear(in_features=1536, out_features=40, bias=False)
+          (kv_down_layernorm): RMSNorm((16,), eps=None, elementwise_affine=True)
+          (kv_up_proj): Linear(in_features=16, out_features=2688, bias=False)
           (o_proj): Linear(in_features=1536, out_features=1536, bias=False)
-          (rotary_emb): RotaryEmbedding()
         )
         (mlp): MOELayer(
           (gate): MOEGate()
