@@ -15,7 +15,7 @@ def print_parameters(model):
     print(f"total param {num_param/1024/1024}m")
 
 
-def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, n_kv_head, attn_impl='sdpa', device='cuda'):
+def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, n_kv_head, q_lora_rank, qk_rope_head_dim, qk_nope_head_dim, kv_lora_rank, v_head_dim, n_expert, n_expert_per_token, n_group, n_topk_group, moe_intermediate_size, attn_impl='sdpa', device='cuda'):
 
     # uer/gpt2-chinese-cluecorpussmall
     # Qwen/Qwen3-0.6B
@@ -35,6 +35,17 @@ def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, n_kv
         eos_token_id=tokenizer.eos_token_id,
         tie_word_embeddings=True,
         _attn_implementation=attn_impl,
+        q_lora_rank = q_lora_rank,
+        qk_rope_head_dim = qk_rope_head_dim,
+        qk_nope_head_dim = qk_nope_head_dim,
+        kv_lora_rank = kv_lora_rank,
+        v_head_dim = v_head_dim, 
+        n_expert = n_expert,
+        n_expert_per_token = n_expert_per_token,
+        n_group = n_group,
+        n_topk_group = n_topk_group,
+        moe_intermediate_size = moe_intermediate_size,
+        
     )
     model = BuddyGPTForCausalLM(config)
     print(tokenizer.pad_token, tokenizer.pad_token_id)
@@ -42,6 +53,15 @@ def load_tokenizer_model(tokenizer_name, seq_len, n_layer, n_embed, n_head, n_kv
     print(model)
     print_parameters(model)
     model.to(device)
+    return tokenizer, model
+
+def load_cpt_model(path, device='cuda'):
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    import model.modeling_buddygpt
+
+    tokenizer = AutoTokenizer.from_pretrained(path)
+    model = AutoModelForCausalLM.from_pretrained(path).to(device)
+    print(model)
     return tokenizer, model
 
 
@@ -119,28 +139,28 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
             # web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
             # ~32B token
             # zh_web_ds = load_dataset("openbmb/Ultra-FineWeb", split="zh").filter(lambda x: x['score'] >= 0.95, num_proc=num_proc)
-            zh_web_ds = load_dataset(
-                "parquet",
-                data_files="data/Ultra-FineWeb/data/ultrafineweb_zh/ultrafineweb-zh-*.parquet",
-                split='train',
-                # num_proc=num_proc,
-                # streaming=True,
-            ).filter(lambda x: float(x['score']) >= 0.85, 
-                 num_proc=num_proc
-            )
+            # zh_web_ds = load_dataset(
+            #     "parquet",
+            #     data_files="data/Ultra-FineWeb/data/ultrafineweb_zh/ultrafineweb-zh-*.parquet",
+            #     split='train',
+            #     # num_proc=num_proc,
+            #     # streaming=True,
+            # ).filter(lambda x: float(x['score']) >= 0.85, 
+            #      num_proc=num_proc
+            # )
             
-            # ~ 4.176B token
-            # en_web_ds = load_dataset("openbmb/Ultra-FineWeb", split="en").filter(lambda x: x['score'] >= 0.99, num_proc=num_proc)
-            # ~30B
-            en_web_ds = load_dataset(
-                "parquet",
-                data_files="data/Ultra-FineWeb/data/ultrafineweb_en/ultrafineweb-en-part-0[0-1][0-9][0-9]-of-2048.parquet",
-                split='train',
-                # num_proc=num_proc,
-                # streaming=True,
-            ).filter(lambda x: float(x['score']) >= 0.85, 
-                 num_proc=num_proc
-            )
+            # # ~ 4.176B token
+            # # en_web_ds = load_dataset("openbmb/Ultra-FineWeb", split="en").filter(lambda x: x['score'] >= 0.99, num_proc=num_proc)
+            # # ~30B
+            # en_web_ds = load_dataset(
+            #     "parquet",
+            #     data_files="data/Ultra-FineWeb/data/ultrafineweb_en/ultrafineweb-en-part-0[0-1][0-9][0-9]-of-2048.parquet",
+            #     split='train',
+            #     # num_proc=num_proc,
+            #     # streaming=True,
+            # ).filter(lambda x: float(x['score']) >= 0.85, 
+            #      num_proc=num_proc
+            # )
             
             # wikipedia ds ~= 0.77B
             # wiki_ds = load_dataset("data/wikipedia", "20231101.zh", split="train")
@@ -174,16 +194,16 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
             # ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
             # novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
             # novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-            zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=zh_web_ds.column_names,
-                                     num_proc=num_proc,
-                                 ).map(group_texts, batched=True, batch_size=batch_size,
-                                     num_proc=num_proc,
-                                 )
-            en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=en_web_ds.column_names,
-                                     num_proc=num_proc,
-                                 ).map(group_texts, batched=True, batch_size=batch_size,
-                                     num_proc=num_proc,
-                                 )
+            # zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=zh_web_ds.column_names,
+            #                          num_proc=num_proc,
+            #                      ).map(group_texts, batched=True, batch_size=batch_size,
+            #                          num_proc=num_proc,
+            #                      )
+            # en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=en_web_ds.column_names,
+            #                          num_proc=num_proc,
+            #                      ).map(group_texts, batched=True, batch_size=batch_size,
+            #                          num_proc=num_proc,
+            #                      )
             wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, batch_size=batch_size, remove_columns=[],
                                      num_proc=num_proc,
                              ).map(group_texts, batched=True, batch_size=batch_size,
@@ -195,7 +215,7 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
                                          num_proc=num_proc,
                                      )
             
-            ds = concatenate_datasets([zh_web_ds, en_web_ds, wiki_ds, instruct_ds])
+            ds = concatenate_datasets([wiki_ds, instruct_ds])
             print(ds)
             # ds.save_to_disk(data_cache_dir)
         else:
@@ -311,23 +331,49 @@ def parse_args():
     parser.add_argument("--sample_step", type=int, default=100)
     parser.add_argument("--ds_num_proc", type=int, default=30)
     parser.add_argument("--ds_batch_size", type=int, default=1024)
+    parser.add_argument("--cpt_path", type=str, default=None)
+    # q_lora_rank, qk_rope_head_dim, qk_nope_head_dim, kv_lora_rank, v_head_dim, n_expert, n_expert_per_token, n_group, n_topk_group
+    parser.add_argument("--q_lora_rank", type=int, default=None)
+    parser.add_argument("--qk_rope_head_dim", type=int, default=None)
+    parser.add_argument("--qk_nope_head_dim", type=int, default=None)
+    parser.add_argument("--kv_lora_rank", type=int, default=None)
+    parser.add_argument("--v_head_dim", type=int, default=None)
+    parser.add_argument("--n_expert", type=int, default=None)
+    parser.add_argument("--n_expert_per_token", type=int, default=None)
+    parser.add_argument("--n_group", type=int, default=None)
+    parser.add_argument("--n_topk_group", type=int, default=None)
+    parser.add_argument("--moe_intermediate_size", type=int, default=None)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    tokenizer, model = load_tokenizer_model(
-        tokenizer_name='Qwen/Qwen3-0.6B', 
-        seq_len=args.block_size, 
-        n_layer=args.n_layer, 
-        n_embed=args.n_embed, 
-        n_head=args.n_head, 
-        n_kv_head=args.n_kv_head,
-        attn_impl=args.attn_impl,
-        device=device,
-    )
-    sample(tokenizer, model, '中国首都是哪?')
+    if args.cpt_path is None:
+        tokenizer, model = load_tokenizer_model(
+            tokenizer_name='Qwen/Qwen3-0.6B', 
+            seq_len=args.block_size, 
+            n_layer=args.n_layer, 
+            n_embed=args.n_embed, 
+            n_head=args.n_head, 
+            n_kv_head=args.n_kv_head,
+            attn_impl=args.attn_impl,
+            device=device,
+            
+            q_lora_rank=args.q_lora_rank,
+            qk_rope_head_dim=args.qk_rope_head_dim,
+            qk_nope_head_dim=args.qk_nope_head_dim,
+            kv_lora_rank=args.kv_lora_rank,
+            v_head_dim=args.v_head_dim,
+            n_expert=args.n_expert,
+            n_expert_per_token=args.n_expert_per_token,
+            n_group=args.n_group,
+            n_topk_group=args.n_topk_group,
+            moe_intermediate_size=args.moe_intermediate_size,
+        )
+    else:
+        tokenizer, model = load_cpt_model(args.cpt_path, device)
+    print(sample(tokenizer, model, '中国首都是哪?'))
     ds = load_dataset(tokenizer, num_proc=args.ds_num_proc, batch_size=args.ds_batch_size, seq_len=args.block_size)
     train(
         ds=ds,
