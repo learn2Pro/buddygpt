@@ -73,38 +73,17 @@ graph LR
 | Mxode/Chinese-Instruct |[Chinese-Instruct](https://huggingface.co/datasets/Mxode/Chinese-Instruct) | 中文指令微调数据集(100B) |
 
 
-#### summary
+#### method
+1. model structure(RoPE/GQA)
+2. chinese dataset + english dataset + instruct dataset
 
-- buddygpt-0.1b-base-zh
-![step8600](static/step8600-zh.png)
-![step8600](static/step8600-en.png)
-![train_metrics](static/01b-train-metrics.png)
-
-- buddygpt-0.2b-base-zh
-![buddygpt-0.2b-base-zh](static/buddygpt-0.2b-base-zh.png)
-
-- buddygpt-0.4b-base-zh
-![buddygpt-0.4b-base-zh](static/buddygpt-0.2b-base-zh.png)
-![step1200](static/step1200.png)
-![step2800](static/step2800.png)
-![step3800](static/step3800.png)
-![step7600](static/step7600.png)
-![step10000](static/step10000.png) 可以看到开始有北京了，这时候loss=3.8
- 
-#### metrics
-|model|cmmlu|mmlu|ceval|gpqa|ifeval|aime24|math-500|livecodebench|
-|-|-|-|-|-|-|-|-|-|
-|[buddygpt-0.1b-base](https://huggingface.co/learn2pro/buddygpt-0.1b-base)|*25.38*|*24.64*|*24.29*|25.38|25.06|0.1|0.1|0.1|
-|deepseek-r1|-|**90.8**|-|59.1|**86.1**|39.2|**90.2**|37.6|
-|deepseek-v3|**88.8**|88.5|**90.1**|59.1|**86.1**|39.2|**90.2**|37.6|
-|qwen2.5-0.5b|41.44|45.2|39.23|-|-|-|32.44|-|
-|qwen3-0.6b|35.29|37.56|37.6|-|-|-|32.44|-|
-|buddy-0.3b-base|25.6|25.04|28.6|-|-|-|32.44|-|
-|buddy-0.3b-chat|25.37|25.04|25.85|-|-|-|32.44|-|
+#### train metrics
+- https://wandb.ai/druidlangde-tencent/huggingface/runs/dqtpk235?nw=nwuserdruidlangde
 
 
 ## SFT
 
+#### dataset
 SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要包含以下几个经典的SFT数据集，大约有400w条，详细数据集如下：
 
 | SFT微调数据 | 链接                                                         | 描述                                       |
@@ -113,18 +92,13 @@ SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要�
 | Belle       | [Belle_train](https://huggingface.co/datasets/BelleGroup/train_2M_CN) | 包含约200万条由BELLE项目生成的中文指令数据 |
 | YeungNLP/moss-003-sft-data |[moss-003-sft-data](https://huggingface.co/datasets/YeungNLP/moss-003-sft-data)|YeungNLP|
 | shareAI/ShareGPT-Chinese-English-90k |[ShareGPT-Chinese-English-90k](https://huggingface.co/datasets/shareAI/ShareGPT-Chinese-English-90k) | A high-quality Chinese-English parallel bilingual human-machine QA dataset |
-| FuseChat-3.0-SFT-Data       | [FuseChat-3.0-SFT-Data](https://huggingface.co/datasets/FuseAI/FuseChat-3.0-SFT-Data) | FuseChat-3.0: Preference Optimization for Implicit Model Fusion |
 
-#### metrics
-|model|cmmlu|mmlu|ceval|gpqa|ifeval|aime24|math-500|livecodebench|
-|-|-|-|-|-|-|-|-|-|
-|[buddygpt-0.1b-base](https://huggingface.co/learn2pro/buddygpt-0.1b-base)|*25.38*|*24.64*|*24.29*|25.38|25.06|0.1|0.1|0.1|
-|[buddygpt-0.1b-chat](https://huggingface.co/learn2pro/buddygpt-0.1b-chat)|*25.19*|*24.47*|*31.75*|25.38|25.06|0.1|0.1|0.1|
-|deepseek-r1|-|**90.8**|-|59.1|**86.1**|39.2|**90.2**|37.6|
-|deepseek-v3|**88.8**|88.5|**90.1**|59.1|**86.1**|39.2|**90.2**|37.6|
-|qwen2.5-0.5b|41.44|45.2|39.23|-|-|-|32.44|-|
-|qwen3-0.6b|35.29|37.56|37.6|-|-|-|32.44|-|
+#### method
+1. long context 1024->4096 rope内插（interpolation）
+2. instruct following
 
+#### train metrics
+- https://wandb.ai/druidlangde-tencent/huggingface/runs/svxce3hs/overview
 
 ## RLHF
 
@@ -136,6 +110,24 @@ SFT指令微调预料都来自[Hugging Face](https://huggingface.co/)，主要�
 | Hello-SimpleAI/HC3-Chinese     | [Hello-SimpleAI/HC3-Chinese](https://huggingface.co/datasets/Hello-SimpleAI/HC3-Chinese) | 流萤开源模型SFT数据集                      |
 |YeungNLP/ultrafeedback_binarized|[YeungNLP/ultrafeedback_binarized](https://huggingface.co/datasets/YeungNLP/ultrafeedback_binarized)|YeungNLP DPO|
 |HuggingFaceH4/ultrafeedback_binarized|[HuggingFaceH4/ultrafeedback_binarized](https://huggingface.co/datasets/HuggingFaceH4/ultrafeedback_binarized)| HuggingFaceH4/ultrafeedback_binarized |
+
+#### method
+1. dpo with FuseAI/FuseChat-3.0-DPO-Data 
+
+#### train metrics
+- https://wandb.ai/druidlangde-tencent/huggingface/runs/xjwzlbob/workspace?nw=nwuserdruidlangde
+
+## evaluation
+
+|model|cmmlu|mmlu|ceval|gpqa|ifeval|aime24|math-500|livecodebench|
+|-|-|-|-|-|-|-|-|-|
+|[buddygpt-0.1b-base](https://huggingface.co/learn2pro/buddygpt-0.1b-base)|*25.38*|*24.64*|*24.29*|25.38|25.06|0.1|0.1|0.1|
+|[buddy-0.3b-base](https://huggingface.co/learn2pro/buddy-0.3b-base)|25.6|25.04|28.6|-|-|-|32.44|-|
+|[buddy-0.3b-chat](https://huggingface.co/learn2pro/buddy-0.3b-chat)|25.37|25.04|25.85|-|-|-|32.44|-|
+|deepseek-r1|-|**90.8**|-|59.1|**86.1**|39.2|**90.2**|37.6|
+|deepseek-v3|**88.8**|88.5|**90.1**|59.1|**86.1**|39.2|**90.2**|37.6|
+|qwen2.5-0.5b|41.44|45.2|39.23|-|-|-|32.44|-|
+|qwen3-0.6b|35.29|37.56|37.6|-|-|-|32.44|-|
 
 
 ## code structure
