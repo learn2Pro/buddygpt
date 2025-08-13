@@ -7,7 +7,7 @@
 |-|-|-|-|-|-|-|-|-|-|-|-|
 |buddygpt-0.1b|✅|✅|❌|❌|16|8|768|8|1024|20*64k|3.5766|
 |buddygpt-0.3b|✅|✅|❌|❌|16|8|1024|24|1024|20*64k|-|
-|buddygpt-0.7b|✅|✅|✅(q_lora=16,q_rope=24,q_nope=72,v_dim=96)|✅(n_expert=12,share=2,activate=2)|16|-|**1536**|**24**|1024|**2*1024k**|-|
+|buddygpt-0.7b|✅|✅|✅(q_lora=16,q_rope=24,q_nope=72,v_dim=96)|✅(n_expert=16,share=2,activate=2)|16|-|**1536**|**24**|1024|**2*1024k**|-|
 
 
 ```
@@ -58,7 +58,7 @@ BuddyGPTForCausalLM(
         (mlp): MOELayer(
           (gate): MOEGate()
           (experts): ModuleList(
-            (0-11): 12 x GateMLP(
+            (0-15): 16 x GateMLP(
               (gate_proj): Linear(in_features=1536, out_features=256, bias=False)
               (up_proj): Linear(in_features=1536, out_features=256, bias=False)
               (down_proj): Linear(in_features=256, out_features=1536, bias=False)
@@ -222,8 +222,8 @@ transformers chat learn2pro/buddygpt-0.1b-chat
 - push_to_hub:
 ```
 huggingface-cli login
-huggingface-cli repo create buddygpt-0.3b-chat --type model
-huggingface-cli upload learn2pro/buddygpt-0.3b-chat .
+huggingface-cli repo create buddygpt-0.7b-moe-base --type model
+huggingface-cli upload learn2pro/buddygpt-0.7b-moe-base .
 ```
 
 - push to modelscope:
