@@ -140,28 +140,28 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
             # web_ds = load_dataset("HuggingFaceFW/fineweb", "sample-10BT", split="train")
             # ~32B token
             # zh_web_ds = load_dataset("openbmb/Ultra-FineWeb", split="zh").filter(lambda x: x['score'] >= 0.95, num_proc=num_proc)
-            # zh_web_ds = load_dataset(
-            #     "parquet",
-            #     data_files="data/Ultra-FineWeb/data/ultrafineweb_zh/ultrafineweb-zh-*.parquet",
-            #     split='train',
-            #     # num_proc=num_proc,
-            #     # streaming=True,
-            # ).filter(lambda x: float(x['score']) >= 0.85, 
-            #      num_proc=num_proc
-            # )
+            zh_web_ds = load_dataset(
+                "parquet",
+                data_files="data/Ultra-FineWeb/data/ultrafineweb_zh/ultrafineweb-zh-*.parquet",
+                split='train',
+                num_proc=num_proc,
+                # streaming=True,
+            ).filter(lambda x: float(x['score']) >= 0.85, 
+                 num_proc=num_proc
+            )
             
             # # ~ 4.176B token
             # # en_web_ds = load_dataset("openbmb/Ultra-FineWeb", split="en").filter(lambda x: x['score'] >= 0.99, num_proc=num_proc)
             # # ~30B
-            # en_web_ds = load_dataset(
-            #     "parquet",
-            #     data_files="data/Ultra-FineWeb/data/ultrafineweb_en/ultrafineweb-en-part-0[0-1][0-9][0-9]-of-2048.parquet",
-            #     split='train',
-            #     # num_proc=num_proc,
-            #     # streaming=True,
-            # ).filter(lambda x: float(x['score']) >= 0.85, 
-            #      num_proc=num_proc
-            # )
+            en_web_ds = load_dataset(
+                "parquet",
+                data_files="data/Ultra-FineWeb/data/ultrafineweb_en/ultrafineweb-en-part-0[0-1][0-9][0-9]-of-2048.parquet",
+                split='train',
+                num_proc=num_proc,
+                # streaming=True,
+            ).filter(lambda x: float(x['score']) >= 0.85, 
+                 num_proc=num_proc
+            )
             
             # wikipedia ds ~= 0.77B
             # wiki_ds = load_dataset("data/wikipedia", "20231101.zh", split="train")
@@ -169,6 +169,7 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
                 "parquet", 
                 data_files="data/wikipedia/20231101.zh/*.parquet", 
                 split='train',
+                num_proc=num_proc,
                 # streaming=True,
             )
 
@@ -177,7 +178,7 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
                 "json",
                 data_files="data/Chinese-Instruct/**/*.jsonl",
                 split="train",
-                # num_proc=num_proc,
+                num_proc=num_proc,
                 # streaming=True,
             )
             # firefly ds
@@ -195,16 +196,16 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
             # ff_ds = ff_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=ff_ds.column_names)
             # novel_ds = novel_ds.map(encode, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
             # novel_ds = novel_ds.map(group_texts, batched=True, num_proc=num_proc, remove_columns=novel_ds.column_names)
-            # zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=zh_web_ds.column_names,
-            #                          num_proc=num_proc,
-            #                      ).map(group_texts, batched=True, batch_size=batch_size,
-            #                          num_proc=num_proc,
-            #                      )
-            # en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=en_web_ds.column_names,
-            #                          num_proc=num_proc,
-            #                      ).map(group_texts, batched=True, batch_size=batch_size,
-            #                          num_proc=num_proc,
-            #                      )
+            zh_web_ds = zh_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=zh_web_ds.column_names,
+                                     num_proc=num_proc,
+                                 ).map(group_texts, batched=True, batch_size=batch_size,
+                                     num_proc=num_proc,
+                                 )
+            en_web_ds = en_web_ds.map(lambda x: encode(x, 'content'), batched=True, batch_size=batch_size, remove_columns=en_web_ds.column_names,
+                                     num_proc=num_proc,
+                                 ).map(group_texts, batched=True, batch_size=batch_size,
+                                     num_proc=num_proc,
+                                 )
             wiki_ds = wiki_ds.map(lambda x: encode(x, 'text'), batched=True, batch_size=batch_size, remove_columns=[],
                                      num_proc=num_proc,
                              ).map(group_texts, batched=True, batch_size=batch_size,
@@ -216,7 +217,7 @@ def load_dataset(tokenizer, num_proc, batch_size, seq_len):
                                          num_proc=num_proc,
                                      )
             
-            ds = concatenate_datasets([wiki_ds, instruct_ds])
+            ds = concatenate_datasets([zh_web_ds, instruct_ds, en_web_ds, wiki_ds])
             print(ds)
             # ds.save_to_disk(data_cache_dir)
         else:
@@ -275,7 +276,7 @@ def train(ds, tokenizer, model, output_dir, per_device_train_batch_size, gradien
     args = TrainingArguments(
         run_name=f'buddygpt-{now}',
         output_dir=output_dir,
-        learning_rate=2e-3,
+        learning_rate=2e-5,
         adam_beta1 = 0.9,
         adam_beta2 = 0.99,
         weight_decay = 0.1,

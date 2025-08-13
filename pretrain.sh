@@ -13,6 +13,7 @@ pip install -U -r requirements.txt
 
 # cd pretrain && accelerate launch --config_file ptrain.yaml --num_processes=8 pretrain.py --batch_size=20 --gradient_accumulation_steps=64 --n_embed=1024 --n_layer=32 --ds_num_proc=300
 
+export WANDB_API_KEY=xx
 export PYTHONPATH=$(pwd):$PYTHONPATH
 export WANDB_BASE_URL=https://api.bandw.top
 export HF_ENDPOINT=https://hf-mirror.com
@@ -28,6 +29,30 @@ python pretrain/pretrain.py \
     --attn_impl sdpa \
     --gradient_accumulation_steps 64
 
+# 4090
+python pretrain/pretrain.py \
+    --output_dir outputs/buddygpt-0.7b-moe-mla-base \
+    --block_size 1024 \
+    --n_embed 1024 \
+    --n_head 16 \
+    --n_layer 12 \
+    --attn_impl mla \
+    --q_lora_rank 16 \
+    --qk_rope_head_dim 16 \
+    --qk_nope_head_dim 48 \
+    --kv_lora_rank 16 \
+    --v_head_dim 64 \
+    --n_expert 16 \
+    --n_expert_per_token 2 \
+    --n_group 4 \
+    --n_topk_group 1 \
+    --moe_intermediate_size 1024 \
+    --batch_size 2 \
+    --ds_num_proc 16 \
+    --ds_batch_size 4096 \
+    --gradient_accumulation_steps 1024
+    
+# h100
 python pretrain/pretrain.py \
     --output_dir outputs/buddygpt-0.7b-moe-mla-base \
     --block_size 1024 \
@@ -45,8 +70,10 @@ python pretrain/pretrain.py \
     --n_group 2 \
     --n_topk_group 1 \
     --moe_intermediate_size 256 \
-    --batch_size 14 \
-    --gradient_accumulation_steps 768
+    --batch_size 16 \
+    --ds_num_proc 60 \
+    --ds_batch_size 81920 \
+    --gradient_accumulation_steps 1024
 
 # python pretrain/pretrain.py \
 #     --output_dir outputs/buddygpt-0.3b-cpt \
